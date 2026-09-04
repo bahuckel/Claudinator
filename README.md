@@ -157,8 +157,12 @@ exact numbers.
 - **Per project** — see *How attribution works* below.
 - **Per agent** — the main thread versus each subagent type.
 - **🔧 Tool output** — how many tokens each tool has poured into contexts, with
-  call counts and the average per call. This is usually what makes a session
-  expensive: a tool result is re-read by every turn that follows it.
+  call counts, the average per call, and the biggest single results. This is
+  usually what makes a session expensive: a tool result is re-read by every
+  turn that follows it.
+- **📈 Context growth** — the exactly measured counterpart: how many tokens were
+  appended between one turn and the next, and the largest jumps with the tools
+  that ran in them.
 - **Agent runs** — every individual subagent launch, by its task description.
 - **Per model** — tokens and cost split by model id.
 - **Per effort** — the same split by effort level.
@@ -212,10 +216,38 @@ what gives both the agent type and the human-readable task description.
 usually dominate, which is normal for long agentic sessions — they are also the
 cheapest tokens, at 10% of the input rate.
 
-**Tool output** is sized from the serialized transcript line of each tool
-result, at roughly 4 characters per token, and results under 400 characters are
-ignored. It is an estimate of volume, not a billed number — the same bytes are
-already counted exactly in the cache-read and input totals.
+**Tool output** is sized from the tool result's own `content` — the part the
+model actually reads — at roughly 4 characters per token, plus a flat 1,600
+tokens per image block. Results under 400 characters are ignored. The
+transcript line is *not* a good proxy: it carries the payload a second time
+under `toolUseResult` plus routing metadata, so measuring the line roughly
+doubles the real figure.
+
+**Context growth** is exact rather than estimated. The prompt of turn N+1,
+minus the prompt of turn N, minus what the model itself wrote in turn N, is
+precisely what got appended in between — all three numbers come straight from
+the usage blocks. Turns where the prompt shrank (compaction, context editing)
+are skipped rather than counted as zero.
+
+### Why the per-tool numbers are estimates
+
+It is tempting to attribute that exact growth to the individual tool results in
+the gap, which would give exact per-tool token counts. Measured against real
+transcripts, it does not hold:
+
+- Aggregated over 3,550 turn gaps, the growth implies **0.87 characters per
+  token** — impossible for text. The gap carries system reminders and other
+  injected context, not just the tool result.
+- The overhead is not a constant that can be subtracted: turns where nothing
+  arrived still grew by 97 tokens at the 10th percentile and 2,097 at the 90th.
+- Over a thousand gaps show a *negative* delta from context editing and
+  compaction, which breaks attribution for those turns outright.
+
+Exact per-result counts would need a tokenizer for the current Claude models,
+which Anthropic does not publish, or a call to the token-counting API, which
+would mean an API key and network access. Both were rejected in favour of
+keeping this tool local and keyless, so per-tool figures are labelled as
+estimates and per-turn growth is offered as the measured number beside them.
 
 ---
 

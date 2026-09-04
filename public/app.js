@@ -641,7 +641,7 @@ function renderCompact() {
               : '';
             const top = s.topTools && s.topTools[0];
             const tools = top
-              ? `<div class="sm">${Math.round(s.toolShare * 100)}% of that context is tool output — mostly ` +
+              ? `<div class="sm">≈${Math.round(s.toolShare * 100)}% of that context is tool output — mostly ` +
                 `<b>${esc(toolLabel(top.name))}</b> (${fmt(top.tokens)} tok over ${full(top.calls)} calls)</div>`
               : '';
             const early = s.costPerMsgEarly
@@ -910,7 +910,7 @@ function renderTools() {
   const list = d.tools || [];
   const totalTokens = list.reduce((s, t) => s + t.tokens, 0);
   $('toolHint').textContent = list.length
-    ? `≈ ${fmt(totalTokens)} tokens of tool results, re-read by every later turn · sized at ~${d.toolCharsPerToken} chars/token`
+    ? `≈ ${fmt(totalTokens)} tokens of tool results, re-read by every later turn · estimated at ~${d.toolCharsPerToken} chars/token`
     : '';
   if (!list.length) {
     host.innerHTML = '<p class="empty">No sizeable tool results in this range.</p>';
@@ -931,6 +931,65 @@ function renderTools() {
   host.innerHTML =
     `<table><thead><tr><th>Tool</th><th>Est. tokens</th><th>Share</th><th>Calls</th><th>Avg / call</th></tr></thead>` +
     `<tbody>${rows}</tbody></table>`;
+}
+
+function renderBiggestTools() {
+  const list = state.data.biggestToolResults || [];
+  const host = $('biggestTools');
+  if (!list.length) {
+    host.innerHTML = '<p class="empty">Nothing large enough to list.</p>';
+    return;
+  }
+  const max = list[0].tokens || 1;
+  host.innerHTML = list
+    .slice(0, 8)
+    .map((b) => {
+      const w = ((b.tokens / max) * 100).toFixed(1);
+      const when = new Date(b.ts).toLocaleString(undefined, {
+        month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+      });
+      return (
+        `<div class="rowline"><div class="fill" style="width:${w}%"></div>` +
+        `<span class="lbl">${esc(toolLabel(b.name))}<span class="sm"> · ${when}</span></span>` +
+        `<b>${fmt(b.tokens)}</b></div>`
+      );
+    })
+    .join('');
+}
+
+function renderGrowth() {
+  const g = state.data.contextGrowth;
+  const host = $('growth');
+  if (!g || !g.turns) {
+    $('growthHint').textContent = '';
+    host.innerHTML = '<p class="empty">Not enough consecutive turns to measure growth.</p>';
+    return;
+  }
+  $('growthHint').textContent =
+    `${fmt(g.measured)} tokens appended across ${full(g.turns)} turns · ${fmt(g.avgPerTurn)} per turn` +
+    (g.shrinks ? ` · ${full(g.shrinks)} compactions skipped` : '');
+  const max = g.biggest[0] ? g.biggest[0].grew : 1;
+  host.innerHTML =
+    `<p class="note">Exactly measured from the usage blocks: the next prompt minus this one, ` +
+    `minus what the model wrote. Includes anything Claude Code injected, not only tool results.</p>` +
+    g.biggest
+      .slice(0, 10)
+      .map((e) => {
+        const w = ((e.grew / max) * 100).toFixed(1);
+        const when = new Date(e.ts).toLocaleString(undefined, {
+          month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+        });
+        const tools = e.tools.length
+          ? e.tools.map(toolLabel).join(', ') + (e.toolCount > e.tools.length ? ' +' + (e.toolCount - e.tools.length) : '')
+          : 'no tool result — injected context or a pasted message';
+        return (
+          `<div class="rowline" title="${esc(e.title || e.session)}">` +
+          `<div class="fill" style="width:${w}%"></div>` +
+          `<span class="lbl">${esc(tools)}<span class="sm"> · ${esc(e.project)} · ${when}</span></span>` +
+          `<b>+${fmt(e.grew)}</b></div>`
+        );
+      })
+      .join('');
 }
 
 function renderSessions() {
@@ -1012,6 +1071,8 @@ function renderAll() {
     empty: 'No agent activity — every token came from the main thread.',
   });
   renderTools();
+  renderBiggestTools();
+  renderGrowth();
   breakdownTable(
     $('agentRuns'),
     (d.agentRuns || []).map((r) => Object.assign({}, r, { path: r.agent + ' · ' + r.project })),

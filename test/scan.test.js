@@ -442,5 +442,97 @@ test('tool results are sized and attributed to their tool', async () => {
   assert.equal(p.toolCalls.length, 1);
   assert.equal(p.toolCalls[0].n, 'Bash');
   assert.equal(p.toolCalls[0].s, 'sess-1');
-  assert.ok(p.toolCalls[0].c > 2000);
+  assert.equal(p.toolCalls[0].c, 2000); // the content, not the whole line
+});
+
+test('tool results are sized from their content, not the transcript line', async () => {
+  const dir = tmpDir();
+  const file = path.join(dir, 'sess-1.jsonl');
+  const payload = 'y'.repeat(4000);
+  writeJsonl(file, [
+    assistant({
+      uuid: 'a1',
+      message: Object.assign(assistant().message, {
+        content: [{ type: 'tool_use', id: 'tu1', name: 'Read', input: {} }],
+      }),
+    }),
+    {
+      // The line stores the payload twice: once for the model, once as metadata.
+      type: 'user', uuid: 'r1', sessionId: 'sess-1', timestamp: '2026-09-04T10:00:01.000Z',
+      toolUseResult: { file: { content: payload } },
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu1', content: payload }] },
+    },
+  ]);
+  const p = await parseFile(file);
+  assert.equal(p.toolCalls.length, 1);
+  // content only, not the ~8k+ line
+  assert.equal(p.toolCalls[0].c, 4000);
+  assert.equal(p.toolCalls[0].i, 0);
+});
+
+test('image blocks in a tool result are counted separately', async () => {
+  const dir = tmpDir();
+  const file = path.join(dir, 'sess-1.jsonl');
+  writeJsonl(file, [
+    assistant({
+      uuid: 'a1',
+      message: Object.assign(assistant().message, {
+        content: [{ type: 'tool_use', id: 'tu1', name: 'Screenshot', input: {} }],
+      }),
+    }),
+    {
+      type: 'user', uuid: 'r1', sessionId: 'sess-1', timestamp: '2026-09-04T10:00:01.000Z',
+      message: {
+        role: 'user',
+        content: [{
+          type: 'tool_result', tool_use_id: 'tu1',
+          content: [
+            { type: 'text', text: 'z'.repeat(500) },
+            { type: 'image', source: { type: 'base64', data: 'AAAA' } },
+          ],
+        }],
+      },
+    },
+  ]);
+  const p = await parseFile(file);
+  assert.equal(p.toolCalls[0].c, 500);
+  assert.equal(p.toolCalls[0].i, 1);
+
+  const rec = {
+    key: 'k', ts: Date.now(), model: 'claude-opus-5', speed: 'standard', effort: 'high',
+    session: 'sess-1', sidechain: false, agentId: null, agent: 'main thread',
+    cwd: 'C:\w\p', project: 'p', projectPath: 'C:\w\p',
+    in: 10, out: 10, think: 0, cw5: 0, cw1: 0, cr: 0, webSearch: 0, webFetch: 0,
+  };
+  const calls = p.toolCalls.map((t) => Object.assign({}, t, { t: rec.ts }));
+  const a = aggregate([rec], '7d', PRICING, {}, {}, {}, calls);
+  // 500 chars / 4 + one image at the documented flat rate
+  assert.equal(a.tools[0].tokens, 125 + 1600);
+  assert.equal(a.tools[0].images, 1);
+});
+
+test('context growth is measured exactly and skips compactions', () => {
+  const now = Date.now();
+  const mk = (key, ts, ctx, out) => ({
+    key, ts, model: 'claude-opus-5', speed: 'standard', effort: 'high',
+    session: 's', sidechain: false, agentId: null, agent: 'main thread',
+    cwd: 'C:\w\p', project: 'p', projectPath: 'C:\w\p',
+    in: 0, out, think: 0, cw5: 0, cw1: 0, cr: ctx, webSearch: 0, webFetch: 0,
+  });
+  const records = [
+    mk('a', now - 4000, 10000, 100),
+    mk('b', now - 3000, 15000, 200), // grew 15000 - 10000 - 100 = 4900
+    mk('c', now - 2000, 3000, 50), // compaction: shrank, skipped
+    mk('d', now - 1000, 9000, 10), // grew 9000 - 3000 - 50 = 5950
+  ];
+  const toolCalls = [{ s: 's', t: now - 3500, n: 'Bash', c: 1000, i: 0, a: null }];
+  const g = aggregate(records, '7d', PRICING, {}, {}, {}, toolCalls).contextGrowth;
+
+  assert.equal(g.turns, 2);
+  assert.equal(g.shrinks, 1);
+  assert.equal(g.measured, 4900 + 5950);
+  assert.equal(g.biggest[0].grew, 5950);
+  assert.equal(g.biggest[1].grew, 4900);
+  assert.deepEqual(g.biggest[1].tools, ['Bash']);
+  assert.deepEqual(g.biggest[0].tools, []);
 });

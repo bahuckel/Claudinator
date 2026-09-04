@@ -1006,3 +1006,58 @@ tr.clickable:hover .title {
     grid-template-columns: 1fr auto;
   }
 }
+
+/* ---------- context growth / biggest results ---------- */
+
+.rowline {
+  position: relative;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 10px;
+  border-bottom: 1px solid #1e242e;
+  font-size: 12.5px;
+  overflow: hidden;
+}
+
+.rowline:hover {
+  background: var(--panel-2);
+}
+
+.rowline .fill {
+  position: absolute;
+  left: 0;
+  top: 2px;
+  bottom: 2px;
+  background: linear-gradient(90deg, rgba(217, 119, 87, 0.28), rgba(217, 119, 87, 0.05));
+  border-radius: 4px;
+  z-index: 0;
+}
+
+.rowline .lbl {
+  position: relative;
+  z-index: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rowline .sm {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.rowline b {
+  position: relative;
+  z-index: 1;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.note {
+  color: var(--muted);
+  font-size: 11.5px;
+  margin: 0 0 10px;
+  line-height: 1.45;
+}
