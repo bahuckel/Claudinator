@@ -247,7 +247,8 @@ test('compact suggestions flag big contexts and detect earlier compactions', () 
   // subagent turns must not count as the session's context
   records.push(mk(50, 'small', 900000, { sidechain: true, agentId: 'ag', agent: 'Explore' }));
 
-  const a = aggregate(records, '7d', PRICING, {}, { compactThresholdTokens: 150000, compactTargetTokens: 20000 });
+  const opts = { compactThresholdTokens: 150000, compactTargetTokens: 20000 };
+  const a = aggregate(records, '7d', PRICING, {}, opts);
   assert.equal(a.compact.sessionsChecked, 2);
   assert.equal(a.compact.suggestions.length, 1);
   const s = a.compact.suggestions[0];
@@ -260,4 +261,41 @@ test('compact suggestions flag big contexts and detect earlier compactions', () 
   // (260100 - 20000) cache-read tokens at $5/M * 0.1
   assert.equal(Number(s.savePerMsg.toFixed(4)), Number(((260100 - 20000) * 0.5 / 1e6).toFixed(4)));
   assert.equal(a.sessions.find((x) => x.name === 'small').contextNow, 30100);
+
+  // A mark makes the suggestion count only the turns after it.
+  const beforeLastTwo = records.filter((r) => r.session === 'big')[3].ts - 1;
+  const marked = aggregate(records, '7d', PRICING, {}, opts, { big: beforeLastTwo });
+  const ms = marked.compact.suggestions[0];
+  assert.equal(ms.session, 'big');
+  assert.equal(ms.messages, 3); // the 30k / 120k / 260k turns
+  assert.equal(ms.contextPeak, 260100); // the 400k turn is behind the mark
+  assert.equal(ms.compactions, 0); // so is the drop that followed it
+  assert.equal(ms.markedAt, beforeLastTwo);
+  assert.equal(marked.compact.marks[0].turnsSince, 3);
+
+  // Marking after the last turn retires the suggestion entirely.
+  const retired = aggregate(records, '7d', PRICING, {}, opts, { big: now + 1000 });
+  assert.equal(retired.compact.suggestions.length, 0);
+  assert.equal(retired.compact.marks[0].turnsSince, 0);
+});
+
+test('marks round-trip through the marks file', (t) => {
+  const { loadMarks, setMark } = require('../lib/scan');
+  const file = path.join(__dirname, '..', 'compact-marks.json');
+  const had = fs.existsSync(file) ? fs.readFileSync(file) : null;
+  t.after(() => {
+    if (had) fs.writeFileSync(file, had);
+    else fs.rmSync(file, { force: true });
+  });
+
+  fs.rmSync(file, { force: true });
+  assert.deepEqual(loadMarks(), {});
+  setMark('sess-a', 1234);
+  setMark('sess-b', 5678);
+  assert.deepEqual(loadMarks(), { 'sess-a': 1234, 'sess-b': 5678 });
+  setMark('sess-a', null);
+  assert.deepEqual(loadMarks(), { 'sess-b': 5678 });
+
+  fs.writeFileSync(file, 'not json');
+  assert.deepEqual(loadMarks(), {});
 });

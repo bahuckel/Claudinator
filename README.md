@@ -22,8 +22,8 @@ your own transcripts, so **two people running this see completely different
 dashboards**: their own projects, their own agents, their own days.
 
 Nothing is ever uploaded, and nothing derived from your transcripts is
-committable by accident: the parse cache (`.cache/`) and your `config.json`
-are both gitignored.
+committable by accident: the parse cache (`.cache/`), your `config.json` and
+your compaction marks (`compact-marks.json`) are all gitignored.
 
 ---
 
@@ -91,6 +91,14 @@ project and listed with:
   context lands near `compactTargetTokens`, priced at the cache-read rate);
 - an `idle Nd` badge for sessions untouched for longer than `compactIdleHours`
   (default 48) — those only matter if you resume them.
+
+Each card has a **Compacted ✓** button. Press it after you actually run
+`/compact` in that session: the click timestamp is recorded, and from then on
+only turns *after* it count toward the suggestion. The card disappears until
+the session grows past the threshold again, and a chip at the bottom of the
+panel shows what you marked, how long ago, and how many turns have happened
+since — with an **undo** that forgets the mark and measures the whole session
+again. Marks live in `compact-marks.json` next to `server.js` (gitignored).
 
 The panel header stays visible when collapsed, so the count is always at hand.
 
@@ -221,6 +229,7 @@ The page is a thin client over three endpoints:
 | --- | --- |
 | `GET /api/usage?range=1d\|7d\|30d\|180d\|365d\|all` | Everything the page shows, as JSON. |
 | `GET /api/usage.csv?range=…` | The daily series as CSV. |
+| `POST /api/compact-mark` | Body `{"session":"…","ts":1757000000000}` records a compaction mark; `{"session":"…","clear":true}` removes it. Refuses cross-origin writes. |
 | `GET /api/health` | Liveness, the configured roots and the pid. |
 
 ---
@@ -241,6 +250,7 @@ server.js           static file server + JSON/CSV API
 lib/scan.js         discovery, parsing, caching, project/agent attribution,
                     aggregation, /compact analysis
 pricing.json        per-model rates and cache multipliers
+compact-marks.json  your "I compacted this" timestamps (created on demand)
 public/index.html   page structure
 public/styles.css   dark theme
 public/app.js       SVG charts, tables, interactions (no libraries)

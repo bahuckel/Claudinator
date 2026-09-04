@@ -645,15 +645,19 @@ function renderCompact() {
           // Share of each turn's cost that is just re-reading the discussion.
           const tax = s.costPerMsgNow ? Math.min(0.99, s.savePerMsg / s.costPerMsgNow) : 0;
           const growth = tax ? ` — ${Math.round(tax * 100)}% of it is re-reading context` : '';
+          const since = s.markedAt
+            ? `<div class="sm">counting since you marked it ${ago(s.markedAt)}</div>`
+            : '';
           return (
             `<div class="cs${s.idle ? ' idle' : ''}" title="${esc(s.session)}">` +
             `<div><div class="t">${esc(title)}${comp}${idle}</div>` +
-            `<div class="sm">${full(s.messages)} turns · last ${ago(s.lastActivity)} · ${esc(s.session.slice(0, 8))}</div></div>` +
+            `<div class="sm">${full(s.messages)} turns · last ${ago(s.lastActivity)} · ${esc(s.session.slice(0, 8))}</div>${since}</div>` +
             `<div><div class="big">${fmt(s.contextNow)}</div><div class="sm">context per turn · peak ${fmt(s.contextPeak)}</div>` +
             `<div class="meter"><i style="width:${Math.min(100, (s.contextNow / ctxMax) * 100).toFixed(1)}%"></i></div></div>` +
             `<div class="save"><div>${money(s.costPerMsgNow)} / turn now<span class="sm">${esc(growth)}</span></div>` +
             `<div class="sm">compact saves ≈ <b>${money(s.savePerMsg)}</b> / turn · <b>${money(s.saveNext50)}</b> over 50 turns</div></div>` +
-            `<div class="cmd">/compact</div>` +
+            `<div class="act"><div class="cmd">/compact</div>` +
+            `<button class="markbtn" data-mark="${esc(s.session)}">Compacted ✓</button></div>` +
             `</div>`
           );
         })
@@ -661,7 +665,54 @@ function renderCompact() {
       return `<div class="cgroup"><h3 class="mini">${esc(project)} · ${items.length} session${items.length > 1 ? 's' : ''}</h3>${cards}</div>`;
     })
     .join('');
+
+  if (c.marks && c.marks.length) {
+    host.innerHTML +=
+      `<div class="marklist"><span class="mini">Marked compacted</span>` +
+      c.marks
+        .map(
+          (m) =>
+            `<span class="markchip" title="${esc(m.session)}">` +
+            `${esc((m.title || m.session.slice(0, 8)).slice(0, 44))} · ${ago(m.markedAt)} · ` +
+            `${m.turnsSince ? full(m.turnsSince) + ' turns since' : 'no turns since'}` +
+            `<button class="undo" data-unmark="${esc(m.session)}" title="Forget this mark and count the whole session again">undo</button></span>`
+        )
+        .join('') +
+      `</div>`;
+  }
 }
+
+async function markCompacted(session, clear) {
+  try {
+    const res = await fetch('/api/compact-mark', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(clear ? { session, clear: true } : { session, ts: Date.now() }),
+    });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error || res.statusText);
+  } catch (err) {
+    $('status').className = 'status err';
+    $('status').textContent = 'Could not save the mark: ' + err.message;
+    return;
+  }
+  doFetch();
+}
+
+$('compact').addEventListener('click', (e) => {
+  const mark = e.target.closest('[data-mark]');
+  if (mark) {
+    mark.disabled = true;
+    mark.textContent = 'saving…';
+    markCompacted(mark.dataset.mark, false);
+    return;
+  }
+  const unmark = e.target.closest('[data-unmark]');
+  if (unmark) {
+    unmark.disabled = true;
+    markCompacted(unmark.dataset.unmark, true);
+  }
+});
 
 function renderSessions() {
   const d = state.data;
