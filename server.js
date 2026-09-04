@@ -17,6 +17,17 @@ const {
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const cfg = loadConfig();
+const pkg = require('./package.json');
+const startedAt = Date.now();
+const codeMtime = Math.max(
+  ...[path.join(__dirname, 'server.js'), path.join(__dirname, 'lib', 'scan.js')].map((f) => {
+    try {
+      return Math.round(fs.statSync(f).mtimeMs);
+    } catch {
+      return 0;
+    }
+  })
+);
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -67,7 +78,7 @@ async function usageFor(range, filter) {
     pricing,
     sessionMeta,
     cfg,
-    loadMarks(),
+    loadMarks(cfg.markRetentionDays),
     toolCalls,
     filter
   );
@@ -173,7 +184,15 @@ const server = http.createServer((req, res) => {
   }
 
   if (url.pathname === '/api/health') {
-    sendJson(res, 200, { ok: true, roots: cfg.roots, pid: process.pid });
+    sendJson(res, 200, {
+      ok: true,
+      version: pkg.version,
+      // Code is loaded once at boot; this says which build is actually serving.
+      startedAt,
+      codeMtime,
+      roots: cfg.roots,
+      pid: process.pid,
+    });
     return;
   }
 

@@ -118,10 +118,16 @@ check without you. Marking a session compacted resets its alert.
 Each card has a **Compacted ✓** button. Press it after you actually run
 `/compact` in that session: the click timestamp is recorded, and from then on
 only turns *after* it count toward the suggestion. The card disappears until
-the session grows past the threshold again, and a chip at the bottom of the
-panel shows what you marked, how long ago, and how many turns have happened
-since — with an **undo** that forgets the mark and measures the whole session
-again. Marks live in `compact-marks.json` next to `server.js` (gitignored).
+the session grows past the threshold again.
+
+Marks collect at the bottom of the panel in a collapsed **Marked compacted**
+dropdown — a count badge, then newest first when you open it, each row showing
+the project, when you marked it, how many turns have happened since, when it
+expires, and an **undo** that forgets the mark and measures the whole session
+again. A mark is forgotten automatically after `markRetentionDays` (default 7),
+at which point the session counts from its beginning again; expired marks are
+deleted from the file, not merely hidden. Marks live in `compact-marks.json`
+next to `server.js` (gitignored).
 
 The panel header stays visible when collapsed, so the count is always at hand.
 
@@ -243,7 +249,8 @@ Everything works with no configuration. To change something, create a
   "minWorkspaceChildren": 3,
   "compactThresholdTokens": 150000,
   "compactTargetTokens": 20000,
-  "compactIdleHours": 48
+  "compactIdleHours": 48,
+  "markRetentionDays": 7
 }
 ```
 
@@ -257,6 +264,7 @@ Everything works with no configuration. To change something, create a
 | `compactThresholdTokens` | Context size at which a session earns a `/compact` suggestion. Default `150000`. |
 | `compactTargetTokens` | Assumed context size after compaction, used for the savings estimate. Default `20000`. |
 | `compactIdleHours` | Sessions idle longer than this are shown dimmed. Default `48`. |
+| `markRetentionDays` | Days a "Compacted ✓" mark survives before it is deleted. `0` keeps them forever. Default `7`. |
 
 `CLAUDINATOR_ROOTS` (path-delimiter separated) and `PORT` override the file.
 
@@ -271,7 +279,7 @@ The page is a thin client over three endpoints:
 | `GET /api/usage?range=1d\|7d\|30d\|180d\|365d\|all` | Everything the page shows, as JSON. Optional `project`, `agent`, `model`, `session`, `effort` filters. |
 | `GET /api/usage.csv?range=…` | The daily series as CSV. |
 | `POST /api/compact-mark` | Body `{"session":"…","ts":1757000000000}` records a compaction mark; `{"session":"…","clear":true}` removes it. Refuses cross-origin writes. |
-| `GET /api/health` | Liveness, the configured roots and the pid. |
+| `GET /api/health` | Liveness, version, boot time, the mtime of the loaded code, the configured roots and the pid. |
 
 ---
 

@@ -33,6 +33,7 @@ const state = {
   metric: 'tokens',
   stack: 'type',
   compactOpen: true,
+  marksOpen: false,
   auto: false,
   autoEvery: 60000,
   notify: false,
@@ -58,6 +59,7 @@ function loadPrefs() {
     if (['tokens', 'cost', 'output'].includes(p.metric)) state.metric = p.metric;
     if (['type', 'project', 'model', 'effort'].includes(p.stack)) state.stack = p.stack;
     if (typeof p.compactOpen === 'boolean') state.compactOpen = p.compactOpen;
+    if (typeof p.marksOpen === 'boolean') state.marksOpen = p.marksOpen;
     if (typeof p.auto === 'boolean') state.auto = p.auto;
     if (Number.isFinite(p.autoEvery)) state.autoEvery = p.autoEvery;
     if (typeof p.notify === 'boolean') state.notify = p.notify;
@@ -75,6 +77,7 @@ function savePrefs() {
         metric: state.metric,
         stack: state.stack,
         compactOpen: state.compactOpen,
+        marksOpen: state.marksOpen,
         auto: state.auto,
         autoEvery: state.autoEvery,
         notify: state.notify,
@@ -664,22 +667,40 @@ function renderCompact() {
       .join('');
   }
 
-  if (c.marks && c.marks.length) {
-    host.innerHTML +=
-      `<div class="marklist"><span class="mini">Marked compacted</span>` +
-      c.marks
-        .map(
-          (m) =>
-            `<span class="markchip" title="${esc(m.session)}">` +
-            `${esc((m.title || m.session.slice(0, 8)).slice(0, 44))} · ${ago(m.markedAt)} · ` +
-            `${m.turnsSince ? full(m.turnsSince) + ' turns since' : 'no turns since'}` +
-            `<button class="undo" data-unmark="${esc(m.session)}" title="Forget this mark and count the whole session again">undo</button></span>`
-        )
-        .join('') +
-      `</div>`;
-  }
-
+  host.innerHTML += markListHtml(c);
   maybeNotify(list);
+}
+
+// Marks are already newest-first from the server; they expire on their own, so
+// this list stays a fold-away footnote rather than a growing wall of chips.
+function markListHtml(c) {
+  const marks = c.marks || [];
+  if (!marks.length) return '';
+  const retention = c.markRetentionDays;
+  const rows = marks
+    .map((m) => {
+      const left = m.expiresAt ? Math.max(0, Math.round((m.expiresAt - Date.now()) / 86400000)) : null;
+      const expiry =
+        left === null
+          ? ''
+          : `<span class="sm">forgotten ${left <= 0 ? 'today' : 'in ' + left + 'd'}</span>`;
+      return (
+        `<li title="${esc(m.session)}">` +
+        `<span class="mk-t">${esc((m.title || m.session.slice(0, 8)).slice(0, 60))}</span>` +
+        `<span class="sm">${esc(m.project)} · marked ${ago(m.markedAt)} · ` +
+        `${m.turnsSince ? full(m.turnsSince) + ' turns since' : 'no turns since'}</span>` +
+        expiry +
+        `<button class="undo" data-unmark="${esc(m.session)}" ` +
+        `title="Forget this mark and count the whole session again">undo</button></li>`
+      );
+    })
+    .join('');
+  return (
+    `<details class="marklist" id="markList"${state.marksOpen ? ' open' : ''}>` +
+    `<summary><span class="chev">▾</span>Marked compacted <b>${marks.length}</b>` +
+    `<span class="sm">newest first${retention ? ` · forgotten after ${retention} days` : ''}</span></summary>` +
+    `<ol>${rows}</ol></details>`
+  );
 }
 
 async function markCompacted(session, clear) {
@@ -1154,6 +1175,12 @@ $('compact').addEventListener('click', (e) => {
     markCompacted(unmark.dataset.unmark, true);
   }
 });
+
+$('compact').addEventListener('toggle', (e) => {
+  if (e.target.id !== 'markList') return;
+  state.marksOpen = e.target.open;
+  savePrefs();
+}, true);
 
 $('notifyToggle').addEventListener('click', toggleNotify);
 

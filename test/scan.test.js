@@ -307,6 +307,48 @@ test('marks round-trip through the marks file', (t) => {
   assert.deepEqual(loadMarks(), {});
 });
 
+test('marks older than the retention window are pruned from the file', (t) => {
+  const { loadMarks, setMark } = require('../lib/scan');
+  const file = path.join(__dirname, '..', 'compact-marks.json');
+  const had = fs.existsSync(file) ? fs.readFileSync(file) : null;
+  t.after(() => {
+    if (had) fs.writeFileSync(file, had);
+    else fs.rmSync(file, { force: true });
+  });
+
+  const now = Date.now();
+  const day = 86400000;
+  fs.rmSync(file, { force: true });
+  setMark('fresh', now - 2 * day);
+  setMark('stale', now - 9 * day);
+  setMark('edge', now - 6.9 * day);
+
+  const kept = loadMarks(7);
+  assert.deepEqual(Object.keys(kept).sort(), ['edge', 'fresh']);
+  // the expired entry is gone from disk, not merely hidden
+  assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(file, 'utf8'))).sort(), ['edge', 'fresh']);
+
+  // no retention configured keeps everything
+  setMark('stale', now - 9 * day);
+  assert.equal(Object.keys(loadMarks(0)).length, 3);
+});
+
+test('mark entries carry an expiry for the UI', () => {
+  const now = Date.now();
+  const rec = {
+    key: 'k', ts: now - 1000, model: 'claude-opus-5', speed: 'standard', effort: 'high',
+    session: 's', sidechain: false, agentId: null, agent: 'main thread',
+    cwd: 'C:\w\p', project: 'p', projectPath: 'C:\w\p',
+    in: 200000, out: 0, think: 0, cw5: 0, cw1: 0, cr: 0, webSearch: 0, webFetch: 0,
+  };
+  const markedAt = now - 86400000;
+  const a = aggregate([rec], '7d', PRICING, {}, { markRetentionDays: 7 }, { s: markedAt }, []);
+  const m = a.compact.marks[0];
+  assert.equal(m.session, 's');
+  assert.equal(m.expiresAt, markedAt + 7 * 86400000);
+  assert.equal(a.compact.markRetentionDays, 7);
+});
+
 test('effort, server tools, fast mode and unknown models are all tracked', () => {
   const now = Date.now();
   const base = {
