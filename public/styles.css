@@ -708,3 +708,11 @@ kbd {
 .collapsible.closed > :not(.fold) {
   display: none;
 }
+
+.credit {
+  color: var(--muted);
+  font-size: 11.5px;
+  padding: 2px 2px 0;
+  margin: 0;
+  opacity: 0.75;
+}

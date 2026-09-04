@@ -3,6 +3,20 @@
   "version": "1.0.0",
   "private": true,
   "description": "Local dashboard for Claude Code token usage, read from ~/.claude/projects transcripts",
+  "author": "Bahuckel",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bahuckel/Claudinator.git"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "tokens",
+    "usage",
+    "dashboard",
+    "local"
+  ],
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

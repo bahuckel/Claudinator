@@ -13,6 +13,18 @@ fortune in re-read context.
 **Everything is local.** No API key, no network calls, no telemetry. The server
 binds to `127.0.0.1` and only ever reads files that are already on your disk.
 
+## Your data stays yours
+
+Claudinator ships no data of any kind. There are no sample transcripts, no
+bundled numbers and no baked-in paths — the repository is only code. Every
+figure you see is computed on your machine, at the moment you press FETCH, from
+your own transcripts, so **two people running this see completely different
+dashboards**: their own projects, their own agents, their own days.
+
+Nothing is ever uploaded, and nothing derived from your transcripts is
+committable by accident: the parse cache (`.cache/`) and your `config.json`
+are both gitignored.
+
 ---
 
 ## Quick start
@@ -250,3 +262,13 @@ change `roots` or `port`.
 
 **Nothing loads at all.** Check the terminal running `node server.js` for the
 listening line, and make sure nothing else holds port 8752.
+
+---
+
+## License
+
+[MIT](LICENSE) — © 2026 Bahuckel.
+
+---
+
+*Made by Bahuckel, perfected with Claude.*
