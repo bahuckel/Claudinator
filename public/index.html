@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Claudinator — Claude token usage</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>📊</text></svg>"
+    />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo">◧</span>
+        <div>
+          <h1>Claudinator</h1>
+          <p class="sub">local Claude Code token usage</p>
+        </div>
+      </div>
+
+      <div class="controls">
+        <div class="ranges" id="ranges" role="group" aria-label="Time range"></div>
+        <a id="csv" class="ghost" href="/api/usage.csv?range=30d" title="Download the daily series as CSV">CSV</a>
+        <button id="fetch" class="fetch" title="Rescan transcripts (R)">FETCH</button>
+      </div>
+    </header>
+
+    <p class="status" id="status">Press FETCH to scan your transcripts.</p>
+
+    <main id="main" hidden>
+      <section class="kpis" id="kpis"></section>
+
+      <section class="panel collapsible" id="compactPanel">
+        <button class="panel-head fold" id="compactToggle" aria-expanded="true" aria-controls="compact">
+          <h2><span class="chev">▾</span>⚡ /compact suggestions</h2>
+          <span class="hint" id="compactHint"></span>
+        </button>
+        <div id="compact"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Daily usage <span class="hint" id="bucketNote"></span></h2>
+          <div class="toggles">
+            <div class="seg" id="stackToggle" role="group" aria-label="Stack by">
+              <button data-stack="type" class="on">By type</button>
+              <button data-stack="project">By project</button>
+              <button data-stack="model">By model</button>
+            </div>
+            <div class="seg" id="metricToggle" role="group" aria-label="Chart metric">
+              <button data-metric="tokens" class="on">Tokens</button>
+              <button data-metric="cost">Cost</button>
+              <button data-metric="output">Output</button>
+            </div>
+          </div>
+        </div>
+        <div class="legend" id="legend"></div>
+        <div class="chart" id="dailyChart"></div>
+      </section>
+
+      <section class="panel" id="heatPanel" hidden>
+        <div class="panel-head"><h2>Calendar</h2><span class="hint">one cell per day, darker = more tokens</span></div>
+        <div class="chart" id="heatmap"></div>
+      </section>
+
+      <section class="grid-2">
+        <div class="panel">
+          <div class="panel-head"><h2>🏆 Best days</h2><span class="hint">by total tokens</span></div>
+          <div id="bestDays" class="bestdays"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>Rhythm</h2><span class="hint">when tokens get spent</span></div>
+          <h3 class="mini">By hour of day</h3>
+          <div class="chart small" id="hourChart"></div>
+          <h3 class="mini">By weekday</h3>
+          <div class="chart small" id="weekChart"></div>
+        </div>
+      </section>
+
+      <section class="grid-2">
+        <div class="panel">
+          <div class="panel-head"><h2>Per project</h2><span class="hint" id="projCount"></span></div>
+          <div id="projects"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>Per agent</h2><span class="hint" id="agentCount"></span></div>
+          <div id="agents"></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Agent runs</h2><span class="hint">individual subagent launches, top 25</span>
+        </div>
+        <div id="agentRuns"></div>
+      </section>
+
+      <section class="grid-2">
+        <div class="panel">
+          <div class="panel-head"><h2>Per model</h2></div>
+          <div id="models"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>Top sessions</h2><span class="hint">most tokens first</span></div>
+          <div id="sessions"></div>
+        </div>
+      </section>
+
+      <footer id="scaninfo" class="scaninfo"></footer>
+    </main>
+
+    <div id="tip" class="tip" hidden></div>
+
+    <script src="app.js"></script>
+  </body>
+</html>

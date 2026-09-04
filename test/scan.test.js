@@ -1,0 +1,263 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+const { parseFile, buildProjectResolver, costOf, aggregate, toCsv } = require('../lib/scan');
+
+function tmpDir() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'claudinator-'));
+}
+
+function writeJsonl(file, lines) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+}
+
+function assistant(over) {
+  return Object.assign(
+    {
+      type: 'assistant',
+      uuid: 'u-' + Math.random().toString(36).slice(2),
+      sessionId: 'sess-1',
+      timestamp: '2026-09-04T10:00:00.000Z',
+      cwd: 'C:\\work\\proj',
+      requestId: 'req-1',
+      message: {
+        id: 'msg-1',
+        model: 'claude-opus-5',
+        content: [{ type: 'text', text: 'hi' }],
+        usage: {
+          input_tokens: 10,
+          output_tokens: 20,
+          cache_creation_input_tokens: 100,
+          cache_read_input_tokens: 1000,
+          cache_creation: { ephemeral_5m_input_tokens: 40, ephemeral_1h_input_tokens: 60 },
+          output_tokens_details: { thinking_tokens: 5 },
+        },
+      },
+    },
+    over
+  );
+}
+
+const PRICING = {
+  cacheMultipliers: { write5m: 1.25, write1h: 2, read: 0.1 },
+  default: { input: 0, output: 0 },
+  models: { 'claude-opus-5': { input: 5, output: 25, fast: { input: 10, output: 50 } } },
+};
+
+test('parseFile dedupes streamed blocks of the same message and skips synthetic', () => {
+  const dir = tmpDir();
+  const file = path.join(dir, 'sess-1.jsonl');
+  writeJsonl(file, [
+    assistant({ message: Object.assign(assistant().message, { content: [{ type: 'thinking' }] }) }),
+    assistant({ message: Object.assign(assistant().message, { content: [{ type: 'text', text: 'x' }] }) }),
+    assistant({ requestId: 'req-2', message: Object.assign(assistant().message, { id: 'msg-2' }) }),
+    assistant({ message: Object.assign(assistant().message, { id: 'msg-3', model: '<synthetic>' }) }),
+    { type: 'user', uuid: 'x', sessionId: 'sess-1', message: { role: 'user', content: 'Build me a dashboard please' } },
+    { type: 'user', uuid: 'y', sessionId: 'sess-1', customTitle: 'Dashboard work' },
+  ]);
+  const p = parseFile(file);
+  assert.equal(p.records.length, 2);
+  assert.deepEqual(
+    p.records.map((r) => r.key).sort(),
+    ['msg-1|req-1', 'msg-2|req-2']
+  );
+  const r = p.records[0];
+  assert.equal(r.cw5, 40);
+  assert.equal(r.cw1, 60);
+  assert.equal(r.think, 5);
+  assert.equal(p.sessions['sess-1'].prompt, 'Build me a dashboard please');
+  assert.equal(p.sessions['sess-1'].title, 'Dashboard work');
+});
+
+test('parseFile falls back to the whole cache_creation total when no 5m/1h split', () => {
+  const dir = tmpDir();
+  const file = path.join(dir, 's.jsonl');
+  const a = assistant();
+  delete a.message.usage.cache_creation;
+  writeJsonl(file, [a]);
+  const r = parseFile(file).records[0];
+  assert.equal(r.cw5, 100);
+  assert.equal(r.cw1, 0);
+});
+
+test('parseFile links subagent transcripts to their Agent tool call', () => {
+  const dir = tmpDir();
+  const main = path.join(dir, 'sess-1.jsonl');
+  writeJsonl(main, [
+    assistant({
+      uuid: 'a1',
+      message: Object.assign(assistant().message, {
+        content: [{ type: 'tool_use', id: 'toolu_1', name: 'Agent', input: { subagent_type: 'Explore', description: 'Find the thing' } }],
+      }),
+    }),
+    {
+      type: 'user',
+      uuid: 'r1',
+      sessionId: 'sess-1',
+      toolUseResult: { agentId: 'agent-x', description: 'Find the thing' },
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok' }] },
+    },
+  ]);
+  const p = parseFile(main);
+  assert.equal(p.toolUses.toolu_1.type, 'Explore');
+  assert.equal(p.agentLinks['agent-x'].toolUseId, 'toolu_1');
+});
+
+test('costOf applies cache multipliers and fast-mode rates', () => {
+  const rec = { model: 'claude-opus-5', speed: 'standard', in: 1e6, out: 1e6, cw5: 1e6, cw1: 1e6, cr: 1e6 };
+  // 5 + 25 + 6.25 + 10 + 0.5
+  assert.equal(Number(costOf(rec, PRICING).toFixed(2)), 46.75);
+  assert.equal(Number(costOf(Object.assign({}, rec, { speed: 'fast' }), PRICING).toFixed(2)), 93.5);
+  assert.equal(costOf(Object.assign({}, rec, { model: 'unknown-model' }), PRICING), 0);
+});
+
+test('project resolver rolls subfolders up to the git root or project folder', () => {
+  const ws = tmpDir();
+  const repo = path.join(ws, 'RepoA');
+  fs.mkdirSync(path.join(repo, '.git'), { recursive: true });
+  fs.mkdirSync(path.join(repo, 'src', 'deep'), { recursive: true });
+  const plain = path.join(ws, 'PlainB');
+  fs.mkdirSync(path.join(plain, 'docs'), { recursive: true });
+  const c = path.join(ws, 'C');
+  fs.mkdirSync(c);
+
+  const cwds = [
+    path.join(repo, 'src', 'deep'),
+    repo,
+    plain,
+    path.join(plain, 'docs'),
+    c,
+    ws, // a session started in the workspace itself
+  ];
+  const resolve = buildProjectResolver(cwds, { minWorkspaceChildren: 3 });
+
+  assert.equal(resolve(path.join(repo, 'src', 'deep')).label, 'RepoA');
+  assert.equal(resolve(path.join(plain, 'docs')).label, 'PlainB');
+  assert.equal(resolve(c).label, 'C');
+  assert.equal(resolve(ws).workspace, true);
+  assert.equal(resolve(ws).label, path.basename(ws) + ' (root)');
+});
+
+test('project resolver honours explicit projectRoots', () => {
+  const ws = tmpDir();
+  const mono = path.join(ws, 'mono');
+  const pkgs = ['a', 'b', 'c'].map((n) => path.join(mono, 'packages', n));
+  for (const p of pkgs) fs.mkdirSync(p, { recursive: true });
+  const resolve = buildProjectResolver(pkgs, { projectRoots: [mono], minWorkspaceChildren: 3 });
+  assert.equal(resolve(pkgs[0]).label, 'mono');
+});
+
+test('aggregate builds daily series, best days, previous window and csv', () => {
+  const now = Date.now();
+  const day = 86400000;
+  const mk = (ts, project, agent, out) => ({
+    key: 'k' + ts + project + agent,
+    ts,
+    model: 'claude-opus-5',
+    speed: 'standard',
+    session: 's-' + project,
+    sidechain: agent !== 'main thread',
+    agentId: agent !== 'main thread' ? 'ag' : null,
+    agent,
+    agentTask: agent !== 'main thread' ? 'Do a task' : null,
+    cwd: 'C:\\w\\' + project,
+    project,
+    projectPath: 'C:\\w\\' + project,
+    in: 1,
+    out,
+    think: 0,
+    cw5: 0,
+    cw1: 0,
+    cr: 0,
+    webSearch: 0,
+    webFetch: 0,
+  });
+  const records = [
+    mk(now - 9 * day, 'old', 'main thread', 500), // previous window only
+    mk(now - 2 * day, 'alpha', 'main thread', 100),
+    mk(now - 1 * day, 'alpha', 'general-purpose', 300),
+    mk(now, 'beta', 'main thread', 50),
+  ];
+  const a = aggregate(records, '7d', PRICING, { 's-alpha': { title: 'Alpha work' } });
+
+  assert.equal(a.series.length, 7);
+  assert.equal(a.activeDays, 3);
+  assert.equal(a.totals.output, 450);
+  assert.equal(a.previous.output, 500);
+  assert.equal(a.bestDays[0].output, 300);
+  assert.equal(a.projects[0].name, 'alpha');
+  assert.equal(a.agents.map((x) => x.name).sort().join(','), 'general-purpose,main thread');
+  assert.equal(a.agentRuns[0].name, 'Do a task');
+  assert.equal(a.sessions.find((s) => s.name === 's-alpha').title, 'Alpha work');
+
+  const yesterday = a.series[a.series.length - 2];
+  assert.equal(yesterday.byProject.alpha.output, 300);
+  assert.equal(yesterday.byModel['claude-opus-5'].output, 300);
+
+  const csv = toCsv(a);
+  assert.equal(csv.split('\n')[0], 'date,input,output,thinking,cacheWrite,cacheRead,total,messages,sessions,cost');
+  assert.equal(csv.trim().split('\n').length, 8);
+
+  const all = aggregate(records, 'all', PRICING);
+  assert.equal(all.previous, null);
+  assert.equal(all.series.length, 10);
+});
+
+test('compact suggestions flag big contexts and detect earlier compactions', () => {
+  const now = Date.now();
+  const mk = (i, session, cr, extra) =>
+    Object.assign(
+      {
+        key: session + i,
+        ts: now - (100 - i) * 60000,
+        model: 'claude-opus-5',
+        speed: 'standard',
+        session,
+        sidechain: false,
+        agentId: null,
+        agent: 'main thread',
+        agentTask: null,
+        cwd: 'C:\\w\\p',
+        project: 'p',
+        projectPath: 'C:\\w\\p',
+        in: 100,
+        out: 50,
+        think: 0,
+        cw5: 0,
+        cw1: 0,
+        cr,
+        webSearch: 0,
+        webFetch: 0,
+      },
+      extra
+    );
+
+  const records = [];
+  // "big": context climbs to 400k, gets compacted once (drop to 30k), climbs again to 260k
+  const ctxs = [50000, 150000, 400000, 30000, 120000, 260000];
+  ctxs.forEach((cr, i) => records.push(mk(i, 'big', cr)));
+  // "small": stays under threshold
+  [10000, 20000, 30000].forEach((cr, i) => records.push(mk(i, 'small', cr)));
+  // subagent turns must not count as the session's context
+  records.push(mk(50, 'small', 900000, { sidechain: true, agentId: 'ag', agent: 'Explore' }));
+
+  const a = aggregate(records, '7d', PRICING, {}, { compactThresholdTokens: 150000, compactTargetTokens: 20000 });
+  assert.equal(a.compact.sessionsChecked, 2);
+  assert.equal(a.compact.suggestions.length, 1);
+  const s = a.compact.suggestions[0];
+  assert.equal(s.session, 'big');
+  assert.equal(s.contextNow, 260100);
+  assert.equal(s.contextPeak, 400100);
+  assert.equal(s.compactions, 1);
+  assert.equal(s.turnsAboveThreshold, 3);
+  assert.equal(s.idle, false);
+  // (260100 - 20000) cache-read tokens at $5/M * 0.1
+  assert.equal(Number(s.savePerMsg.toFixed(4)), Number(((260100 - 20000) * 0.5 / 1e6).toFixed(4)));
+  assert.equal(a.sessions.find((x) => x.name === 'small').contextNow, 30100);
+});

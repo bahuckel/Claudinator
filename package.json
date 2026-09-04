@@ -1,0 +1,14 @@
+{
+  "name": "claudinator",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local dashboard for Claude Code token usage, read from ~/.claude/projects transcripts",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/scan.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
