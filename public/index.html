@@ -22,22 +22,41 @@
 
       <div class="controls">
         <div class="ranges" id="ranges" role="group" aria-label="Time range"></div>
+        <div class="auto">
+          <button id="autoToggle" class="ghost" aria-pressed="false" title="Re-scan on a timer (T)">
+            AUTO
+          </button>
+          <select id="autoEvery" class="mini-select" aria-label="Auto-refresh interval">
+            <option value="30000">30s</option>
+            <option value="60000" selected>1m</option>
+            <option value="300000">5m</option>
+            <option value="900000">15m</option>
+          </select>
+        </div>
         <a id="csv" class="ghost" href="/api/usage.csv?range=30d" title="Download the daily series as CSV">CSV</a>
         <button id="fetch" class="fetch" title="Rescan transcripts (R)">FETCH</button>
       </div>
     </header>
 
     <p class="status" id="status">Press FETCH to scan your transcripts.</p>
+    <div id="filterBar" class="filterbar" hidden></div>
+    <div id="warnings"></div>
 
     <main id="main" hidden>
       <section class="kpis" id="kpis"></section>
 
       <section class="panel collapsible" id="compactPanel">
-        <button class="panel-head fold" id="compactToggle" aria-expanded="true" aria-controls="compact">
+        <button class="panel-head fold" id="compactToggle" aria-expanded="true" aria-controls="compactBody">
           <h2><span class="chev">▾</span>⚡ /compact suggestions</h2>
           <span class="hint" id="compactHint"></span>
         </button>
-        <div id="compact"></div>
+        <div id="compactBody">
+          <div class="notifyrow">
+            <button id="notifyToggle" class="ghost small" aria-pressed="false">🔔 Notify me</button>
+            <span class="hint" id="notifyHint"></span>
+          </div>
+          <div id="compact"></div>
+        </div>
       </section>
 
       <section class="panel">
@@ -48,6 +67,7 @@
               <button data-stack="type" class="on">By type</button>
               <button data-stack="project">By project</button>
               <button data-stack="model">By model</button>
+              <button data-stack="effort">By effort</button>
             </div>
             <div class="seg" id="metricToggle" role="group" aria-label="Chart metric">
               <button data-metric="tokens" class="on">Tokens</button>
@@ -92,6 +112,14 @@
 
       <section class="panel">
         <div class="panel-head">
+          <h2>🔧 Tool output</h2>
+          <span class="hint" id="toolHint"></span>
+        </div>
+        <div id="tools"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
           <h2>Agent runs</h2><span class="hint">individual subagent launches, top 25</span>
         </div>
         <div id="agentRuns"></div>
@@ -103,9 +131,14 @@
           <div id="models"></div>
         </div>
         <div class="panel">
-          <div class="panel-head"><h2>Top sessions</h2><span class="hint">most tokens first</span></div>
-          <div id="sessions"></div>
+          <div class="panel-head"><h2>Per effort</h2><span class="hint">output_config.effort of each turn</span></div>
+          <div id="efforts"></div>
         </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head"><h2>Top sessions</h2><span class="hint">most tokens first · click to filter</span></div>
+        <div id="sessions"></div>
       </section>
 
       <footer id="scaninfo" class="scaninfo"></footer>

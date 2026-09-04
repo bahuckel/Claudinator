@@ -6,7 +6,14 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { parseFile, buildProjectResolver, costOf, aggregate, toCsv } = require('../lib/scan');
+const {
+  parseFile,
+  buildProjectResolver,
+  costOf,
+  cacheWaste,
+  aggregate,
+  toCsv,
+} = require('../lib/scan');
 
 function tmpDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'claudinator-'));
@@ -50,7 +57,7 @@ const PRICING = {
   models: { 'claude-opus-5': { input: 5, output: 25, fast: { input: 10, output: 50 } } },
 };
 
-test('parseFile dedupes streamed blocks of the same message and skips synthetic', () => {
+test('parseFile dedupes streamed blocks of the same message and skips synthetic', async () => {
   const dir = tmpDir();
   const file = path.join(dir, 'sess-1.jsonl');
   writeJsonl(file, [
@@ -61,7 +68,7 @@ test('parseFile dedupes streamed blocks of the same message and skips synthetic'
     { type: 'user', uuid: 'x', sessionId: 'sess-1', message: { role: 'user', content: 'Build me a dashboard please' } },
     { type: 'user', uuid: 'y', sessionId: 'sess-1', customTitle: 'Dashboard work' },
   ]);
-  const p = parseFile(file);
+  const p = await parseFile(file);
   assert.equal(p.records.length, 2);
   assert.deepEqual(
     p.records.map((r) => r.key).sort(),
@@ -75,18 +82,18 @@ test('parseFile dedupes streamed blocks of the same message and skips synthetic'
   assert.equal(p.sessions['sess-1'].title, 'Dashboard work');
 });
 
-test('parseFile falls back to the whole cache_creation total when no 5m/1h split', () => {
+test('parseFile falls back to the whole cache_creation total when no 5m/1h split', async () => {
   const dir = tmpDir();
   const file = path.join(dir, 's.jsonl');
   const a = assistant();
   delete a.message.usage.cache_creation;
   writeJsonl(file, [a]);
-  const r = parseFile(file).records[0];
+  const r = (await parseFile(file)).records[0];
   assert.equal(r.cw5, 100);
   assert.equal(r.cw1, 0);
 });
 
-test('parseFile links subagent transcripts to their Agent tool call', () => {
+test('parseFile links subagent transcripts to their Agent tool call', async () => {
   const dir = tmpDir();
   const main = path.join(dir, 'sess-1.jsonl');
   writeJsonl(main, [
@@ -104,7 +111,7 @@ test('parseFile links subagent transcripts to their Agent tool call', () => {
       message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok' }] },
     },
   ]);
-  const p = parseFile(main);
+  const p = await parseFile(main);
   assert.equal(p.toolUses.toolu_1.type, 'Explore');
   assert.equal(p.agentLinks['agent-x'].toolUseId, 'toolu_1');
 });
@@ -298,4 +305,100 @@ test('marks round-trip through the marks file', (t) => {
 
   fs.writeFileSync(file, 'not json');
   assert.deepEqual(loadMarks(), {});
+});
+
+test('effort, server tools, fast mode and unknown models are all tracked', () => {
+  const now = Date.now();
+  const base = {
+    speed: 'standard',
+    effort: 'high',
+    session: 's',
+    sidechain: false,
+    agentId: null,
+    agent: 'main thread',
+    cwd: 'C:\w\p',
+    project: 'p',
+    projectPath: 'C:\w\p',
+    in: 0, out: 0, think: 0, cw5: 0, cw1: 0, cr: 0, webSearch: 0, webFetch: 0,
+  };
+  const pricing = Object.assign({}, PRICING, {
+    serverTools: { webSearchPer1k: 10, webFetchPer1k: 0 },
+  });
+  const records = [
+    Object.assign({}, base, { key: 'a', ts: now - 1000, out: 1e6, effort: 'high' }),
+    Object.assign({}, base, { key: 'b', ts: now - 900, out: 1e6, effort: 'max', speed: 'fast' }),
+    Object.assign({}, base, { key: 'c', ts: now - 800, webSearch: 100 }),
+    Object.assign({}, base, { key: 'd', ts: now - 700, out: 1e6, model: 'claude-mystery-9' }),
+  ];
+  for (const r of records) if (!r.model) r.model = 'claude-opus-5';
+
+  const a = aggregate(records, '7d', pricing, {}, {}, {}, []);
+  assert.deepEqual(a.efforts.map((e) => e.name).sort(), ['high', 'max']);
+  assert.equal(a.efforts.find((e) => e.name === 'max').messages, 1);
+  assert.equal(a.totals.webSearch, 100);
+  assert.equal(a.totals.fastMessages, 1);
+  // 100 searches at $10/1k = $1
+  assert.ok(a.totals.cost > 1);
+  assert.equal(a.unknownModels.length, 1);
+  assert.equal(a.unknownModels[0].name, 'claude-mystery-9');
+  assert.equal(a.unknownModels[0].messages, 1);
+  // fast mode is billed at the fast rate: 1M output at $50 instead of $25
+  assert.equal(Number(a.totals.fastCost.toFixed(2)), 50);
+  const day = a.series[a.series.length - 1];
+  assert.ok(day.byEffort.high && day.byEffort.max);
+
+  // filtering narrows every panel
+  const f = aggregate(records, '7d', pricing, {}, {}, {}, [], { effort: 'max' });
+  assert.equal(f.totals.messages, 1);
+  assert.deepEqual(f.filter, { effort: 'max' });
+});
+
+test('cache waste counts writes that no later turn could read', () => {
+  const now = Date.now();
+  const mk = (key, ts, cw5, cw1) => ({
+    key, ts, model: 'claude-opus-5', speed: 'standard', effort: 'high',
+    session: 's', sidechain: false, agentId: null, agent: 'main thread',
+    cwd: 'C:\w\p', project: 'p', projectPath: 'C:\w\p',
+    in: 0, out: 0, think: 0, cw5, cw1, cr: 0, webSearch: 0, webFetch: 0,
+  });
+  const min = 60000;
+  const records = [
+    mk('a', now - 40 * min, 1000, 0), // next turn is 30 min later: 5m write wasted
+    mk('b', now - 10 * min, 2000, 0), // next turn 1 min later: reused
+    mk('c', now - 9 * min, 0, 4000), // last turn: 1h write wasted
+  ];
+  const w = cacheWaste(records, PRICING);
+  assert.equal(w.writes, 3);
+  assert.equal(w.tokens, 5000); // 1000 + 4000
+  // 1000 * 5/1e6 * 1.25 + 4000 * 5/1e6 * 2
+  assert.equal(Number(w.cost.toFixed(6)), Number((1000 * 5e-6 * 1.25 + 4000 * 5e-6 * 2).toFixed(6)));
+});
+
+test('tool results are sized and attributed to their tool', async () => {
+  const dir = tmpDir();
+  const file = path.join(dir, 'sess-1.jsonl');
+  const bigText = 'x'.repeat(2000);
+  writeJsonl(file, [
+    assistant({
+      uuid: 'a1',
+      message: Object.assign(assistant().message, {
+        content: [{ type: 'tool_use', id: 'tu1', name: 'Bash', input: { command: 'ls' } }],
+      }),
+    }),
+    {
+      type: 'user', uuid: 'r1', sessionId: 'sess-1', timestamp: '2026-09-04T10:00:01.000Z',
+      toolUseResult: { stdout: bigText },
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu1', content: bigText }] },
+    },
+    {
+      // below MIN_TOOL_CHARS, ignored
+      type: 'user', uuid: 'r2', sessionId: 'sess-1', timestamp: '2026-09-04T10:00:02.000Z',
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu1', content: 'ok' }] },
+    },
+  ]);
+  const p = await parseFile(file);
+  assert.equal(p.toolCalls.length, 1);
+  assert.equal(p.toolCalls[0].n, 'Bash');
+  assert.equal(p.toolCalls[0].s, 'sess-1');
+  assert.ok(p.toolCalls[0].c > 2000);
 });

@@ -37,8 +37,9 @@ cd Claudinator
 node server.js
 ```
 
-Open <http://localhost:8752>. On Windows you can double-click `start.bat`,
-which starts the server and opens the browser for you.
+Open <http://localhost:8752>. There are launchers that start the server and
+open the browser for you: `start.bat` on Windows, `./start.sh` on macOS and
+Linux.
 
 Run the test suite with:
 
@@ -52,9 +53,13 @@ npm test
 
 ### Fetching
 
-There is no background polling. Press **FETCH** (or the `R` key) to rescan your
-transcripts. The status line under the header reports the window, the totals and
-how long the round trip took.
+Press **FETCH** (or the `R` key) to rescan your transcripts. The status line
+under the header reports the window, the totals and how long the round trip
+took.
+
+**AUTO** (or the `T` key) turns on a rescan timer — 30s, 1m, 5m or 15m, your
+choice — and is **off by default**. A hidden tab skips its scans and catches up
+when you come back to it.
 
 Pick a range with the pills: **1D / 7D / 1M / 6M / 1Y / ALL**. These are rolling
 windows ending today, not calendar periods. Your range, chart metric, stacking
@@ -64,14 +69,25 @@ browser.
 ### KPI cards
 
 Total tokens, estimated cost, output (with the thinking share), cache hit rate,
-messages, active days, input and cache write. Where a comparable previous window
-exists (the 7 days before the current 7, for example), each card also shows the
-change against it.
+cache never reused, messages and active days, plus a **Fast mode** card when any
+turn ran at `speed: "fast"` and a **Server tools** card when web search or web
+fetch was used. Where a comparable previous window exists (the 7 days before the
+current 7, for example), each card also shows the change against it.
 
 **Cache hit rate** is the share of prompt tokens that were served from cache
 instead of being sent fresh. On long agentic sessions this is normally very
 high; a low number means something is invalidating the prompt prefix on every
 turn.
+
+**Cache never reused** is the other side of that coin: cache writes that nothing
+read back before they expired. A 5-minute write only pays off if the same
+conversation asks again within five minutes, an hour write within the hour, so
+each write is checked against the next turn of the same conversation (subagents
+counted separately, since they have their own context).
+
+If a model appears that `pricing.json` does not list, a banner names it and says
+how much of the window was priced at the fallback rate — an unknown model
+silently costed at Opus rates is how an estimate ends up 5x wrong.
 
 ### `/compact` suggestions
 
@@ -89,8 +105,15 @@ project and listed with:
   more than 50% in context between two consecutive turns;
 - what `/compact` would save per turn, and over the next 50 turns (assuming the
   context lands near `compactTargetTokens`, priced at the cache-read rate);
+- how much of that context is **tool output**, and which tool dominates it;
 - an `idle Nd` badge for sessions untouched for longer than `compactIdleHours`
   (default 48) — those only matter if you resume them.
+
+**🔔 Notify me** asks the browser for notification permission and then raises a
+desktop notification when a session first crosses the threshold, or when one
+already flagged has doubled its context since the last alert. It is per-browser,
+off by default, and only fires on a fetch — pair it with **AUTO** so it can
+check without you. Marking a session compacted resets its alert.
 
 Each card has a **Compacted ✓** button. Press it after you actually run
 `/compact` in that session: the click timestamp is recorded, and from then on
@@ -107,8 +130,8 @@ The panel header stays visible when collapsed, so the count is always at hand.
 One column per day, with two independent toggles:
 
 - **Stack by** — *type* (input / output / cache write / cache read), *project*,
-  or *model*. Project and model stacking keep the top 8 keys and fold the rest
-  into `other`.
+  *model*, or *effort* (`output_config.effort` of each turn). The categorical
+  stacks keep the top 8 keys and fold the rest into `other`.
 - **Metric** — tokens, estimated cost, or output only.
 
 Long ranges are bucketed automatically: more than ~10 weeks of days are grouped
@@ -123,14 +146,24 @@ exact numbers.
 - **🏆 Best days** — the top 10 days by total tokens, each naming the project
   that dominated it.
 
-### Breakdowns
+### Breakdowns and drill-down
 
 - **Per project** — see *How attribution works* below.
 - **Per agent** — the main thread versus each subagent type.
+- **🔧 Tool output** — how many tokens each tool has poured into contexts, with
+  call counts and the average per call. This is usually what makes a session
+  expensive: a tool result is re-read by every turn that follows it.
 - **Agent runs** — every individual subagent launch, by its task description.
 - **Per model** — tokens and cost split by model id.
+- **Per effort** — the same split by effort level.
 - **Top sessions** — the 25 largest, titled from the session's custom title or
   its first prompt, with the current context size of each.
+
+Rows in the project, agent, model, effort and session tables are **clickable**:
+one click filters the entire dashboard — every chart, KPI and panel — to that
+slice. Active filters show as chips under the header; remove one with its
+cross, or clear them all with `Escape`. The CSV export follows the current
+filter.
 
 ### Export
 
@@ -173,6 +206,11 @@ what gives both the agent type and the human-readable task description.
 usually dominate, which is normal for long agentic sessions — they are also the
 cheapest tokens, at 10% of the input rate.
 
+**Tool output** is sized from the serialized transcript line of each tool
+result, at roughly 4 characters per token, and results under 400 characters are
+ignored. It is an estimate of volume, not a billed number — the same bytes are
+already counted exactly in the cache-read and input totals.
+
 ---
 
 ## Cost estimates
@@ -180,7 +218,10 @@ cheapest tokens, at 10% of the input rate.
 Costs are computed locally from `pricing.json` (USD per 1M tokens, first-party
 Anthropic API rates) with the standard cache multipliers: a 5-minute cache write
 costs 1.25× the input rate, a 1-hour cache write 2×, and a cache read 0.1×.
-Fast-mode responses use the `fast` rates where a model defines them.
+Fast-mode responses use the `fast` rates where a model defines them, and server
+tools are billed per 1,000 requests from the `serverTools` block (web search
+$10/1k; web fetch has no per-request fee — its content arrives as input tokens
+and is already counted).
 
 This is an **estimate, not a bill.** A Claude subscription is not billed per
 token, and published rates change. Edit `pricing.json` to match your own
@@ -227,7 +268,7 @@ The page is a thin client over three endpoints:
 
 | Endpoint | Returns |
 | --- | --- |
-| `GET /api/usage?range=1d\|7d\|30d\|180d\|365d\|all` | Everything the page shows, as JSON. |
+| `GET /api/usage?range=1d\|7d\|30d\|180d\|365d\|all` | Everything the page shows, as JSON. Optional `project`, `agent`, `model`, `session`, `effort` filters. |
 | `GET /api/usage.csv?range=…` | The daily series as CSV. |
 | `POST /api/compact-mark` | Body `{"session":"…","ts":1757000000000}` records a compaction mark; `{"session":"…","clear":true}` removes it. Refuses cross-origin writes. |
 | `GET /api/health` | Liveness, the configured roots and the pid. |
@@ -236,6 +277,8 @@ The page is a thin client over three endpoints:
 
 ## Performance
 
+Transcripts are read line by line with `readline`, so a file is never held in
+memory whole — the parser is unbothered by multi-gigabyte transcript folders.
 Parsed files are cached in `.cache/records.json`, keyed on each file's size and
 mtime, so only changed transcripts are re-read and the cache file is only
 rewritten when something actually changed. A cold scan of ~90 MB of transcripts
@@ -254,8 +297,10 @@ compact-marks.json  your "I compacted this" timestamps (created on demand)
 public/index.html   page structure
 public/styles.css   dark theme
 public/app.js       SVG charts, tables, interactions (no libraries)
-test/scan.test.js   node:test suite — npm test
+test/scan.test.js   parsing, attribution, pricing and aggregation tests
+test/server.test.js live HTTP tests against a real server on an empty root
 start.bat           Windows launcher
+start.sh            macOS / Linux launcher
 ```
 
 ---

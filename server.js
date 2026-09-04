@@ -12,6 +12,7 @@ const {
   loadMarks,
   setMark,
   RANGES,
+  FILTERABLE,
 } = require('./lib/scan');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -57,10 +58,19 @@ function serveStatic(res, urlPath) {
   });
 }
 
-function usageFor(range) {
+async function usageFor(range, filter) {
   const pricing = loadPricing(); // reloaded each fetch so edits apply live
-  const { records, sessionMeta, stats } = scan(cfg.roots, cfg);
-  const data = aggregate(records, range, pricing, sessionMeta, cfg, loadMarks());
+  const { records, sessionMeta, toolCalls, stats } = await scan(cfg.roots, cfg);
+  const data = aggregate(
+    records,
+    range,
+    pricing,
+    sessionMeta,
+    cfg,
+    loadMarks(),
+    toolCalls,
+    filter
+  );
   data.scan = stats;
   return data;
 }
@@ -107,19 +117,25 @@ const server = http.createServer((req, res) => {
       sendJson(res, 400, { error: 'unknown range: ' + range, valid: Object.keys(RANGES) });
       return;
     }
-    try {
-      const data = usageFor(range);
-      if (url.pathname.endsWith('.csv')) {
-        send(res, 200, 'text/csv; charset=utf-8', toCsv(data), {
-          'Content-Disposition': 'attachment; filename="claudinator-' + range + '.csv"',
-        });
-      } else {
-        sendJson(res, 200, data);
-      }
-    } catch (err) {
-      console.error(err);
-      sendJson(res, 500, { error: err.message });
+    const filter = {};
+    for (const k of FILTERABLE) {
+      const v = url.searchParams.get(k);
+      if (v) filter[k] = v.slice(0, 300);
     }
+    usageFor(range, filter)
+      .then((data) => {
+        if (url.pathname.endsWith('.csv')) {
+          send(res, 200, 'text/csv; charset=utf-8', toCsv(data), {
+            'Content-Disposition': 'attachment; filename="claudinator-' + range + '.csv"',
+          });
+        } else {
+          sendJson(res, 200, data);
+        }
+      })
+      .catch((err) => {
+        console.error(err);
+        sendJson(res, 500, { error: err.message });
+      });
     return;
   }
 
@@ -168,3 +184,5 @@ server.listen(cfg.port, '127.0.0.1', () => {
   console.log('Claudinator on http://localhost:' + cfg.port);
   console.log('Scanning: ' + cfg.roots.join(', '));
 });
+
+module.exports = server;
