@@ -201,9 +201,22 @@ each cwd is rolled up:
    `~/Desktop/Projects`;
 3. otherwise to the cwd itself.
 
-Sessions started directly inside a workspace folder are labelled `<name> (root)`.
-The project table shows how many folders fed each project; hover for the list.
-If the heuristic guesses wrong for your layout, override it in `config.json`.
+A session started directly inside a workspace folder has no project of its own,
+so its **file paths are used instead**: every absolute path in its tool calls
+(`file_path` arguments, and paths inside shell commands, quoted ones included)
+is mapped to a project, and if one project takes at least 60% of at least three
+hits, the whole session is attributed there and the row is marked *inferred
+from file paths*. Genuinely cross-project sessions and sessions that touched
+nothing keep the `<name> (root)` label. Turn this off with
+`"inferProjectFromPaths": false`.
+
+On the corpus this was built against, that moves 15 of 17 root sessions to a
+real project with a 100% one-sided signal, shrinking the meaningless
+`(root)` bucket from 460M tokens to 4M.
+
+The project table shows how many folders fed each project and how many of its
+sessions were inferred; hover for the list. If the heuristic guesses wrong for
+your layout, override it in `config.json`.
 
 **Agents.** Main-thread records are `main thread`. Subagent transcripts live in
 `<session>/subagents/agent-<agentId>.jsonl` and every line carries `agentId`.
@@ -282,7 +295,8 @@ Everything works with no configuration. To change something, create a
   "compactThresholdTokens": 150000,
   "compactTargetTokens": 20000,
   "compactIdleHours": 48,
-  "markRetentionDays": 7
+  "markRetentionDays": 7,
+  "inferProjectFromPaths": true
 }
 ```
 
@@ -297,6 +311,7 @@ Everything works with no configuration. To change something, create a
 | `compactTargetTokens` | Assumed context size after compaction, used for the savings estimate. Default `20000`. |
 | `compactIdleHours` | Sessions idle longer than this are shown dimmed. Default `48`. |
 | `markRetentionDays` | Days a "Compacted ✓" mark survives before it is deleted. `0` keeps them forever. Default `7`. |
+| `inferProjectFromPaths` | Attribute workspace-root sessions to a project using the files they touched. Default `true`. |
 
 `CLAUDINATOR_ROOTS` (path-delimiter separated) and `PORT` override the file.
 

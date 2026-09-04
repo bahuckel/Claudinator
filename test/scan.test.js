@@ -536,3 +536,74 @@ test('context growth is measured exactly and skips compactions', () => {
   assert.deepEqual(g.biggest[1].tools, ['Bash']);
   assert.deepEqual(g.biggest[0].tools, []);
 });
+
+test('tool inputs yield the directories a session touched', async () => {
+  const dir = tmpDir();
+  const file = path.join(dir, 'sess-1.jsonl');
+  writeJsonl(file, [
+    assistant({
+      uuid: 'a1',
+      message: Object.assign(assistant().message, {
+        content: [
+          { type: 'tool_use', id: 't1', name: 'Read', input: { file_path: 'C:\\work\\Alpha\\src\\index.js' } },
+          // a Windows path with a space, only findable because it is quoted
+          { type: 'tool_use', id: 't2', name: 'Bash', input: { command: 'cd "C:\\work\\My Proj\\lib" && ls' } },
+          { type: 'tool_use', id: 't3', name: 'Bash', input: { command: 'cat C:\\work\\Alpha\\readme.md' } },
+          { type: 'tool_use', id: 't4', name: 'Bash', input: { command: 'echo no paths here' } },
+        ],
+      }),
+    }),
+  ]);
+  const p = await parseFile(file);
+  const hits = p.pathHits['sess-1'];
+  assert.ok(hits, 'no path hits recorded');
+  assert.equal(hits['C:\\work\\Alpha\\src'], 1);
+  assert.equal(hits['C:\\work\\Alpha'], 1); // readme.md collapsed to its folder
+  assert.equal(hits['C:\\work\\My Proj\\lib'], 1);
+});
+
+test('a session run from a workspace folder is attributed by the files it touched', async () => {
+  const { scan } = require('../lib/scan');
+  const ws = tmpDir();
+  const alpha = path.join(ws, 'Alpha');
+  const beta = path.join(ws, 'Beta');
+  const gamma = path.join(ws, 'Gamma');
+  for (const d of [alpha, beta, gamma]) fs.mkdirSync(path.join(d, 'src'), { recursive: true });
+
+  const roots = fs.mkdtempSync(path.join(os.tmpdir(), 'claudinator-scan-'));
+  const mk = (session, cwd, content) =>
+    assistant({
+      uuid: 'u-' + session,
+      sessionId: session,
+      cwd,
+      requestId: 'req-' + session,
+      message: Object.assign(assistant().message, { id: 'msg-' + session }, content ? { content } : {}),
+    });
+
+  // three sibling projects in use is what makes `ws` a workspace
+  writeJsonl(path.join(roots, 'a.jsonl'), [mk('s-alpha', alpha)]);
+  writeJsonl(path.join(roots, 'b.jsonl'), [mk('s-beta', beta)]);
+  writeJsonl(path.join(roots, 'c.jsonl'), [mk('s-gamma', gamma)]);
+  // and one session that ran in the workspace itself while editing Beta
+  writeJsonl(path.join(roots, 'd.jsonl'), [
+    mk('s-root', ws, [
+      { type: 'tool_use', id: 'x1', name: 'Read', input: { file_path: path.join(beta, 'src', 'a.js') } },
+      { type: 'tool_use', id: 'x2', name: 'Read', input: { file_path: path.join(beta, 'src', 'b.js') } },
+      { type: 'tool_use', id: 'x3', name: 'Edit', input: { file_path: path.join(beta, 'readme.md') } },
+    ]),
+  ]);
+
+  const on = await scan([roots], { minWorkspaceChildren: 3 });
+  const rootRec = on.records.find((r) => r.session === 's-root');
+  assert.equal(rootRec.project, 'Beta');
+  assert.equal(rootRec.projectInferred, true);
+  assert.equal(on.inferredProjects['s-root'].hits, 3);
+  assert.equal(on.inferredProjects['s-root'].share, 1);
+  // a session that really did run in its own project is untouched
+  assert.equal(on.records.find((r) => r.session === 's-alpha').projectInferred, false);
+
+  const off = await scan([roots], { minWorkspaceChildren: 3, inferProjectFromPaths: false });
+  const plain = off.records.find((r) => r.session === 's-root');
+  assert.equal(plain.project, path.basename(ws) + ' (root)');
+  assert.equal(plain.projectInferred, false);
+});

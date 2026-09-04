@@ -895,13 +895,25 @@ function breakdownTable(host, list, opts) {
 }
 
 function renderProjects() {
+  let inferredTotal = 0;
   const list = state.data.projects.map((p) => {
     const n = p.cwds || 0;
-    const sub = n > 1 ? `${p.path} · ${n} folders` : p.path;
-    const title = n > 1 ? `${p.path}\n\nFolders in use:\n` + (p.cwdList || []).join('\n') : p.path;
-    return Object.assign({}, p, { sub, title });
+    const inf = p.inferredSessions || 0;
+    inferredTotal += inf;
+    const bits = [p.path];
+    if (n > 1) bits.push(`${n} folders`);
+    if (inf) bits.push(`${inf} session${inf > 1 ? 's' : ''} inferred from file paths`);
+    const title =
+      p.path +
+      (n > 1 ? '\n\nFolders in use:\n' + (p.cwdList || []).join('\n') : '') +
+      (inf ? '\n\nSome sessions ran in the workspace folder; the files they touched put them here.' : '');
+    return Object.assign({}, p, { sub: bits.join(' · '), title });
   });
   breakdownTable($('projects'), list, { nameHead: 'Project', subKey: 'sub', filterKey: 'project' });
+  $('projCount').textContent =
+    state.data.projects.length +
+    ' project(s) · click to filter' +
+    (inferredTotal ? ` · ${inferredTotal} inferred` : '');
 }
 
 function renderTools() {
@@ -1085,7 +1097,6 @@ function renderAll() {
     empty: 'No effort level recorded on these turns.',
   });
   renderSessions();
-  $('projCount').textContent = d.projects.length + ' project(s) · click to filter';
   $('agentCount').textContent = d.agents.length + ' agent(s) · click to filter';
   renderScanInfo();
   syncNotifyUi();
