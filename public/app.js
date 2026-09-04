@@ -929,20 +929,26 @@ function renderTools() {
     return;
   }
   const max = list[0].tokens || 1;
+  const anyImages = list.some((t) => t.images);
   const rows = list
     .map((t) => {
       const w = ((t.tokens / max) * 100).toFixed(1);
+      const imgCell = anyImages
+        ? `<td title="${t.images ? full(t.images) + ' image blocks, charged at a flat rate each' : 'text only'}">` +
+          `${t.images ? full(t.images) : '—'}</td>`
+        : '';
       return (
         `<tr><td class="rowbar"><div class="fill" style="width:${w}%"></div>` +
         `<div class="lbl name" title="${esc(t.name)}">${esc(toolLabel(t.name))}</div></td>` +
         `<td>${fmt(t.tokens)}</td><td>${pct(t.tokens / (totalTokens || 1))}</td>` +
-        `<td>${full(t.calls)}</td><td>${fmt(t.tokens / t.calls)}</td></tr>`
+        `<td>${full(t.calls)}</td>${imgCell}<td>${fmt(t.tokens / t.calls)}</td></tr>`
       );
     })
     .join('');
   host.innerHTML =
-    `<table><thead><tr><th>Tool</th><th>Est. tokens</th><th>Share</th><th>Calls</th><th>Avg / call</th></tr></thead>` +
-    `<tbody>${rows}</tbody></table>`;
+    `<table><thead><tr><th>Tool</th><th>Est. tokens</th><th>Share</th><th>Calls</th>` +
+    (anyImages ? '<th title="Image blocks, estimated at a flat rate each">Images</th>' : '') +
+    `<th>Avg / call</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 function renderBiggestTools() {
