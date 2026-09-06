@@ -884,10 +884,53 @@ async function saveKnobs() {
   }
 }
 
-function applyKnobsFold() {
-  $('knobs').hidden = !state.knobsOpen;
-  $('knobsToggle').setAttribute('aria-expanded', String(state.knobsOpen));
-  $('knobsToggle').classList.toggle('on', state.knobsOpen);
+// Keep in step with the transition in styles.css.
+const KNOBS_MS = 240;
+let knobsTimer = null;
+
+/**
+ * Slide the drawer open or shut.
+ *
+ * `height` is animated rather than `grid-template-rows`, which reads well but
+ * is not interpolable everywhere and silently sticks at its start value where
+ * it is not. The end height is measured from the card itself, margin included,
+ * because `scrollHeight` leaves a last child's bottom margin out and the
+ * drawer would land 14px short. Once open it is handed back to `auto`, so a
+ * redraw or a window resize is not clipped by a height measured earlier.
+ */
+function applyKnobsFold(animate) {
+  const wrap = $('knobs');
+  const open = state.knobsOpen;
+  wrap.classList.toggle('open', open);
+  // A clipped drawer is still in the tab order otherwise, so a Tab from the
+  // Options button would land on sliders nobody can see.
+  wrap.inert = !open;
+  $('knobsToggle').setAttribute('aria-expanded', String(open));
+  $('knobsToggle').classList.toggle('on', open);
+
+  if (knobsTimer) {
+    clearTimeout(knobsTimer);
+    knobsTimer = null;
+  }
+  if (!animate) {
+    wrap.style.height = open ? 'auto' : '0px';
+    return;
+  }
+
+  wrap.style.height = wrap.getBoundingClientRect().height + 'px';
+  void wrap.offsetHeight; // commit the start height before changing it
+  wrap.style.height = open ? knobsHeight(wrap) + 'px' : '0px';
+  knobsTimer = setTimeout(() => {
+    if (state.knobsOpen) wrap.style.height = 'auto';
+    knobsTimer = null;
+  }, KNOBS_MS);
+}
+
+function knobsHeight(wrap) {
+  const card = wrap.firstElementChild;
+  if (!card) return 0;
+  const mb = parseFloat(getComputedStyle(card).marginBottom) || 0;
+  return card.getBoundingClientRect().height + mb;
 }
 
 /* ---------------------------------------------------------------- *
@@ -1431,9 +1474,8 @@ $('notifyToggle').addEventListener('click', toggleNotify);
 
 $('knobsToggle').addEventListener('click', () => {
   state.knobsOpen = !state.knobsOpen;
-  applyKnobsFold();
+  applyKnobsFold(true);
   savePrefs();
-  if (state.knobsOpen && !state.settings) loadSettings();
 });
 
 // `input` for the live drag, `change` for a typed number committed with Enter
@@ -1504,8 +1546,8 @@ buildRanges();
 syncSeg($('metricToggle'), 'metric', state.metric);
 syncSeg($('stackToggle'), 'stack', state.stack);
 applyCompactFold();
-applyKnobsFold();
-if (state.knobsOpen) loadSettings();
+applyKnobsFold(false);
+loadSettings();
 syncAuto();
 syncNotifyUi();
 doFetch();

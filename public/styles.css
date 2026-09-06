@@ -871,19 +871,47 @@ tr.clickable:hover .title {
   margin-bottom: 12px;
 }
 
-/* The "Tune" drawer: the thresholds that decide this whole panel. */
+/* The "Options" drawer: the thresholds that decide this whole panel.
+ *
+ * The open height is set in px by applyKnobsFold and handed back to `auto`
+ * when the slide finishes; all this has to do is clip and time it. A shut
+ * drawer is taken out of the tab order with `inert` rather than a delayed
+ * `visibility`, so keyboard focus does not hinge on a transition finishing. */
+.knobs-wrap {
+  height: 0;
+  overflow: hidden;
+  transition: height 240ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .knobs-wrap {
+    transition: none;
+  }
+}
+
+#knobsToggle .chev {
+  display: inline-block;
+  margin-right: 4px;
+  transform: rotate(-90deg);
+  transition: transform 0.15s;
+}
+
+#knobsToggle[aria-expanded='true'] .chev {
+  transform: none;
+}
+
 .knobs {
   border: 1px solid var(--line);
   background: var(--panel-2);
   border-radius: var(--radius);
-  padding: 16px;
+  padding: 14px 16px;
   margin-bottom: 14px;
 }
 
 .knobgrid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
-  gap: 18px 26px;
+  grid-template-columns: repeat(auto-fit, minmax(270px, 1fr));
+  gap: 14px 24px;
 }
 
 .knob label {
@@ -944,8 +972,8 @@ tr.clickable:hover .title {
 
 .knobhelp {
   margin-top: 3px;
-  font-size: 11.5px;
-  line-height: 1.45;
+  font-size: 11px;
+  line-height: 1.4;
   color: var(--muted);
 }
 
@@ -953,8 +981,8 @@ tr.clickable:hover .title {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-top: 18px;
-  padding-top: 14px;
+  margin-top: 14px;
+  padding-top: 12px;
   border-top: 1px solid var(--line);
 }
 

@@ -129,8 +129,9 @@ at which point the session counts from its beginning again; expired marks are
 deleted from the file, not merely hidden. Marks live in `compact-marks.json`
 next to `server.js` (gitignored).
 
-**⚙ Tune** opens the four thresholds this whole panel runs on and lets you set
-them from the page:
+**⚙ Options** slides open the four thresholds this whole panel runs on and
+lets you set them from the page. It is shut by default and costs no room
+when it is:
 
 | Knob | Range | Default |
 | --- | --- | --- |
@@ -302,7 +303,7 @@ numbers — it is re-read on every fetch, so no restart is needed.
 ## Configuration
 
 Everything works with no configuration. The four `/compact` thresholds are
-editable from the page itself — **⚙ Tune** in the suggestions panel writes them
+editable from the page itself — **⚙ Options** in the suggestions panel writes them
 to the same file — so the only reason to open `config.json` by hand is the
 rest of the keys. Create it next to `server.js` (it is gitignored); all keys
 are optional:
@@ -335,7 +336,7 @@ are optional:
 | `markRetentionDays` | ⚙ Days a "Compacted ✓" mark survives before it is deleted. `0` keeps them forever. Default `7`. |
 | `inferProjectFromPaths` | Attribute workspace-root sessions to a project using the files they touched. Default `true`. |
 
-Keys marked ⚙ are the ones **⚙ Tune** edits; the rest are file-only. A save
+Keys marked ⚙ are the ones **⚙ Options** edits; the rest are file-only. A save
 rewrites only those four and leaves everything else in the file untouched. If
 `config.json` is not valid JSON the save is refused rather than overwriting
 whatever you had in there.
