@@ -156,14 +156,21 @@ test('/api/settings reads the knobs, and clamps what it is asked to write', asyn
     const keys = spec.tunables.map((t) => t.key);
     assert.deepEqual(keys.sort(), [
       'compactIdleHours',
+      'compactTargetAuto',
+      'compactTargetScope',
       'compactTargetTokens',
       'compactThresholdTokens',
       'markRetentionDays',
     ]);
     for (const t of spec.tunables) {
-      assert.ok(t.min < t.max, t.key + ' has a usable range');
-      assert.ok(t.label && t.help && t.unit, t.key + ' is fully described');
+      assert.ok(t.label && t.help, t.key + ' is described');
+      if (!t.type) {
+        assert.ok(t.min < t.max, t.key + ' has a usable range');
+        assert.ok(t.unit, t.key + ' has a unit');
+      }
     }
+    assert.equal(spec.values.compactTargetAuto, true, 'measuring is on by default');
+    assert.equal(spec.values.compactTargetScope, '*');
 
     const saved = await post({ values: { compactTargetTokens: 100000, compactIdleHours: 6 } });
     assert.equal(saved.status, 200);
@@ -189,6 +196,13 @@ test('/api/settings reads the knobs, and clamps what it is asked to write', asyn
 
     assert.equal((await post({ values: { port: 9999 } })).status, 400, 'unknown key refused');
     assert.equal((await post({ values: { compactIdleHours: 'lots' } })).status, 400);
+    assert.equal((await post({ values: { compactTargetAuto: 'maybe' } })).status, 400);
+    assert.equal((await post({ values: { compactTargetScope: 42 } })).status, 400);
+
+    const flags = await post({ values: { compactTargetAuto: false, compactTargetScope: 'Alpha' } });
+    const withFlags = (await flags.json()).values;
+    assert.equal(withFlags.compactTargetAuto, false);
+    assert.equal(withFlags.compactTargetScope, 'Alpha');
     assert.equal((await fetch(BASE + '/api/settings', { method: 'DELETE' })).status, 405);
     assert.equal((await post({ values: {} }, { Origin: 'https://evil.example' })).status, 403);
 

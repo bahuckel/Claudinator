@@ -960,6 +960,54 @@ tr.clickable:hover .title {
   width: 42px;
 }
 
+.knobin select {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 7px;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.knobin select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.knobcheck {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 12.5px;
+  color: var(--muted);
+  margin: 0;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
+.knobcheck input {
+  accent-color: var(--accent);
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+}
+
+/* A knob the measurement has taken over stays readable, but says it is not
+ * the one in charge. */
+.knob.off .knobin {
+  opacity: 0.45;
+}
+
+.knob.off .knobin input,
+.knob.off .knobin select {
+  cursor: default;
+}
+
 .knobnote {
   margin-top: 6px;
   font-size: 12px;

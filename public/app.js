@@ -764,27 +764,95 @@ function knobMax(t) {
 function renderKnobs() {
   const st = state.settings;
   if (!st) return;
-  $('knobGrid').innerHTML = st.tunables
-    .map((t) => {
-      const max = knobMax(t);
-      const v = Math.min(state.draft[t.key], max);
-      return (
-        `<div class="knob" data-key="${esc(t.key)}">` +
-        `<label for="n_${esc(t.key)}">${esc(t.label)}</label>` +
-        `<div class="knobin">` +
-        `<input type="range" data-knob="${esc(t.key)}" min="${t.min}" max="${max}" ` +
-        `step="${t.step}" value="${v}" aria-label="${esc(t.label)}">` +
-        `<input type="number" id="n_${esc(t.key)}" data-knob="${esc(t.key)}" min="${t.min}" ` +
-        `max="${max}" step="${t.step}" value="${v}">` +
-        `<span class="unit">${esc(t.unit)}</span>` +
-        `</div>` +
-        `<div class="knobnote" data-note="${esc(t.key)}">${knobNote(t, v)}</div>` +
-        `<div class="knobhelp">${esc(t.help)}</div>` +
-        `</div>`
-      );
-    })
-    .join('');
+  $('knobGrid').innerHTML = st.tunables.map(knobRow).join('');
   syncKnobFoot();
+}
+
+function knobRow(t) {
+  const v = t.type ? state.draft[t.key] : Math.min(state.draft[t.key], knobMax(t));
+  const off = knobDisabled(t);
+  return (
+    `<div class="knob${off ? ' off' : ''}" data-key="${esc(t.key)}">` +
+    `<label for="n_${esc(t.key)}">${esc(t.label)}</label>` +
+    `<div class="knobin">${knobInput(t, v, off)}</div>` +
+    `<div class="knobnote" data-note="${esc(t.key)}">${knobNote(t, v)}</div>` +
+    `<div class="knobhelp">${esc(t.help)}</div>` +
+    `</div>`
+  );
+}
+
+function knobInput(t, v, off) {
+  const id = `n_${esc(t.key)}`;
+  const dis = off ? ' disabled' : '';
+  if (t.type === 'bool') {
+    return (
+      `<label class="knobcheck"><input type="checkbox" id="${id}" data-knob="${esc(t.key)}"` +
+      `${v ? ' checked' : ''}${dis}><span>${v ? 'measuring' : 'set by hand'}</span></label>`
+    );
+  }
+  if (t.type === 'text') {
+    return `<select id="${id}" data-knob="${esc(t.key)}"${dis}>${scopeOptions(v)}</select>`;
+  }
+  const max = knobMax(t);
+  const val = Math.min(v, max);
+  return (
+    `<input type="range" data-knob="${esc(t.key)}" min="${t.min}" max="${max}" ` +
+    `step="${t.step}" value="${val}" aria-label="${esc(t.label)}"${dis}>` +
+    `<input type="number" id="${id}" data-knob="${esc(t.key)}" min="${t.min}" ` +
+    `max="${max}" step="${t.step}" value="${val}"${dis}>` +
+    `<span class="unit">${esc(t.unit)}</span>`
+  );
+}
+
+/**
+ * Projects that have actually been compacted, most evidence first. A project
+ * with nothing to measure is not offered: picking it would silently fall the
+ * whole estimate back to the hand-set number.
+ */
+function scopeOptions(current) {
+  const m = measured();
+  const rows = [
+    { value: '*', label: 'All projects', n: m ? m.all.n : 0 },
+    ...Object.entries(m ? m.byProject : {})
+      .map(([name, st]) => ({ value: name, label: name, n: st.n }))
+      .sort((a, b) => b.n - a.n || a.label.localeCompare(b.label)),
+  ];
+  // Keep a saved scope selectable even after its compactions age out of range.
+  if (current !== '*' && !rows.some((r) => r.value === current)) {
+    rows.push({ value: current, label: current, n: 0 });
+  }
+  return rows
+    .map(
+      (r) =>
+        `<option value="${esc(r.value)}"${r.value === current ? ' selected' : ''}>` +
+        `${esc(r.label)} (${r.n})</option>`
+    )
+    .join('');
+}
+
+function measured() {
+  return (state.data && state.data.compact && state.data.compact.measured) || null;
+}
+
+/** The scope's own numbers, or the corpus-wide ones when it is "all". */
+function measuredScope() {
+  const m = measured();
+  if (!m) return null;
+  const scope = state.draft.compactTargetScope;
+  return !scope || scope === '*' ? m.all : m.byProject[scope] || { n: 0, median: 0, low: 0, high: 0 };
+}
+
+/** True once the measurement is in charge of this knob. */
+function autoTargetOn() {
+  const min = (state.data && state.data.compact && state.data.compact.minCompactions) || 3;
+  const sc = measuredScope();
+  return Boolean(state.draft.compactTargetAuto && sc && sc.n >= min);
+}
+
+function knobDisabled(t) {
+  if (t.key === 'compactTargetScope') return !state.draft.compactTargetAuto;
+  if (t.key === 'compactTargetTokens') return autoTargetOn();
+  return false;
 }
 
 /** The one line under a slider that says what the number actually does. */
@@ -798,9 +866,27 @@ function knobNote(t, v) {
       `in this range would be listed`
     );
   }
+  if (t.key === 'compactTargetAuto') {
+    const sc = measuredScope();
+    if (!v) return 'using the number set below';
+    if (!sc || !sc.n) return 'nothing compacted in this range yet — using the number below';
+    const min = (state.data && state.data.compact && state.data.compact.minCompactions) || 3;
+    if (sc.n < min) {
+      return `only ${full(sc.n)} compaction${sc.n === 1 ? '' : 's'} seen, ${full(min)} needed — using the number below`;
+    }
+    return `<b>${esc(fmt(sc.median))}</b> — median of ${full(sc.n)} compactions`;
+  }
+  if (t.key === 'compactTargetScope') {
+    const sc = measuredScope();
+    if (!sc || !sc.n) return 'nothing measured for this project in the current range';
+    if (sc.n === 1) return `one compaction, at ${esc(fmt(sc.median))}`;
+    return `${full(sc.n)} compactions, ${esc(fmt(sc.low))} to ${esc(fmt(sc.high))}`;
+  }
   if (t.key === 'compactTargetTokens') {
     const thr = state.draft.compactThresholdTokens;
-    return `a session at the threshold would be shown saving ${esc(fmt(Math.max(0, thr - v)))} tokens per turn`;
+    const eff = autoTargetOn() ? measuredScope().median : v;
+    const saving = `a session at the threshold would be shown saving ${esc(fmt(Math.max(0, thr - eff)))} tokens per turn`;
+    return autoTargetOn() ? `measured ${esc(fmt(eff))} is in use — ${saving}` : saving;
   }
   if (t.key === 'compactIdleHours') {
     return v >= 48 ? `${esc((v / 24).toFixed(v % 24 ? 1 : 0))} days` : `${v} hour${v === 1 ? '' : 's'}`;
@@ -832,6 +918,16 @@ function syncKnobFoot() {
 function setKnob(key, raw) {
   const t = tunable(key);
   if (!t) return;
+
+  // The checkbox and the project picker change which rows are live, so those
+  // two redraw the grid. Neither is a drag, so nothing is torn out mid-gesture.
+  if (t.type === 'bool' || t.type === 'text') {
+    state.draft[key] = t.type === 'bool' ? Boolean(raw) : String(raw);
+    delete $('knobStatus').dataset.sticky;
+    renderKnobs();
+    return;
+  }
+
   const max = knobMax(t);
   let v = Number(raw);
   if (!Number.isFinite(v)) v = state.draft[key];
@@ -850,6 +946,9 @@ function setKnob(key, raw) {
     }
     state.draft.compactTargetTokens = Math.min(state.draft.compactTargetTokens, tgtMax);
     paintKnob(tgt, state.draft.compactTargetTokens);
+    // The cap applies to a measured target as well, so its note moves too.
+    const auto = tunable('compactTargetAuto');
+    if (auto) paintKnob(auto, state.draft.compactTargetAuto);
   }
 
   delete $('knobStatus').dataset.sticky;
@@ -860,10 +959,11 @@ function tunable(key) {
   return state.settings && state.settings.tunables.find((x) => x.key === key);
 }
 
-/** Push one knob's value into its two inputs and refresh its note. */
+/** Push one knob's value into its inputs and refresh its note. */
 function paintKnob(t, v) {
   for (const el of document.querySelectorAll(`[data-knob="${t.key}"]`)) {
-    if (el.value !== String(v)) el.value = String(v);
+    if (el.type === 'checkbox') el.checked = Boolean(v);
+    else if (el.value !== String(v)) el.value = String(v);
   }
   const note = document.querySelector(`[data-note="${t.key}"]`);
   if (note) note.innerHTML = knobNote(t, v);
@@ -876,7 +976,15 @@ function paintKnob(t, v) {
  */
 function refreshKnobNotes() {
   if (!state.settings) return;
-  for (const t of state.settings.tunables) paintKnob(t, state.draft[t.key]);
+  // A fetch can change the measurement, and with it whether the hand-set
+  // target is still in charge - which is a row's disabled state, not just its
+  // note. Redraw, unless a knob is being handled right now.
+  const busy = document.activeElement && document.activeElement.closest('#knobs');
+  if (busy) {
+    for (const t of state.settings.tunables) paintKnob(t, state.draft[t.key]);
+    return;
+  }
+  renderKnobs();
 }
 
 async function saveKnobs() {
@@ -1504,7 +1612,7 @@ $('knobsToggle').addEventListener('click', () => {
 for (const ev of ['input', 'change']) {
   $('knobs').addEventListener(ev, (e) => {
     const el = e.target.closest('[data-knob]');
-    if (el) setKnob(el.dataset.knob, el.value);
+    if (el) setKnob(el.dataset.knob, el.type === 'checkbox' ? el.checked : el.value);
   });
 }
 

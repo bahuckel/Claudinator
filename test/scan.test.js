@@ -537,6 +537,98 @@ test('context growth is measured exactly and skips compactions', () => {
   assert.deepEqual(g.biggest[0].tools, []);
 });
 
+test('the post-compact size is measured from the compactions in the transcripts', async () => {
+  const { aggregate } = require('../lib/scan');
+  const now = Date.now();
+  const PRICING = {
+    cacheMultipliers: { write5m: 1.25, write1h: 2, read: 0.1 },
+    default: { input: 5, output: 25 },
+    models: {},
+  };
+  // One session's worth of turns: context climbs, collapses, climbs again.
+  const turn = (session, project, cr, i) => ({
+    session,
+    project,
+    model: 'claude-opus-5',
+    speed: null,
+    ts: now - (100 - i) * 60000,
+    agentId: null,
+    sidechain: false,
+    in: 0,
+    out: 50,
+    cw5: 0,
+    cw1: 0,
+    cr,
+  });
+  const run = (session, project, sizes) => sizes.map((c, i) => turn(session, project, c, i));
+
+  // Three drops, landing at 60k, 70k and 80k: median 70k.
+  const records = [
+    ...run('s1', 'Alpha', [300000, 60000, 400000]),
+    ...run('s2', 'Alpha', [500000, 70000, 600000]),
+    ...run('s3', 'Beta', [450000, 80000, 500000]),
+  ];
+  const opts = { compactThresholdTokens: 150000, compactTargetTokens: 20000 };
+
+  const auto = aggregate(records, '30d', PRICING, {}, Object.assign({ compactTargetAuto: true }, opts), {}, []);
+  assert.equal(auto.compact.measured.all.n, 3, 'all three drops seen');
+  assert.equal(auto.compact.measured.all.median, 70000);
+  assert.equal(auto.compact.measured.byProject.Alpha.n, 2);
+  assert.equal(auto.compact.measured.byProject.Beta.n, 1);
+  assert.equal(auto.compact.targetAuto, true);
+  assert.equal(auto.compact.target, 70000, 'the measurement is what gets used');
+
+  // Scoped to one project, and to one with too little evidence.
+  const scoped = aggregate(records, '30d', PRICING, {},
+    Object.assign({ compactTargetAuto: true, compactTargetScope: 'Beta' }, opts), {}, []);
+  assert.equal(scoped.compact.targetAuto, false, 'one compaction is not enough to trust');
+  assert.equal(scoped.compact.target, 20000, 'so the hand-set number is used');
+
+  // Switched off, the hand-set number wins even with plenty measured.
+  const manual = aggregate(records, '30d', PRICING, {}, Object.assign({ compactTargetAuto: false }, opts), {}, []);
+  assert.equal(manual.compact.targetAuto, false);
+  assert.equal(manual.compact.target, 20000);
+  assert.equal(manual.compact.measured.all.n, 3, 'still reported, just not used');
+});
+
+test('a lone outlier cannot drag the measured post-compact size', async () => {
+  const { aggregate } = require('../lib/scan');
+  const now = Date.now();
+  const PRICING = {
+    cacheMultipliers: { write5m: 1.25, write1h: 2, read: 0.1 },
+    default: { input: 5, output: 25 },
+    models: {},
+  };
+  const turn = (session, cr, i) => ({
+    session,
+    project: 'Alpha',
+    model: 'claude-opus-5',
+    speed: null,
+    ts: now - (100 - i) * 60000,
+    agentId: null,
+    sidechain: false,
+    in: 0,
+    out: 50,
+    cw5: 0,
+    cw1: 0,
+    cr,
+  });
+  const run = (session, sizes) => sizes.map((c, i) => turn(session, c, i));
+  // Two ordinary compactions and one context edit that happened to halve a
+  // very large window. A mean would land near 160k; the median must not.
+  const records = [
+    ...run('s1', [300000, 60000]),
+    ...run('s2', [400000, 70000]),
+    ...run('s3', [900000, 350000]),
+  ];
+  const out = aggregate(records, '30d', PRICING, {},
+    { compactThresholdTokens: 150000, compactTargetTokens: 20000, compactTargetAuto: true }, {}, []);
+  assert.equal(out.compact.measured.all.n, 3);
+  assert.equal(out.compact.measured.all.median, 70000);
+  assert.equal(out.compact.measured.all.high, 350000, 'the outlier is still reported');
+  assert.equal(out.compact.target, 70000);
+});
+
 test('every session reports its context size, not only the ones over the threshold', async () => {
   const { aggregate } = require('../lib/scan');
   const now = Date.now();

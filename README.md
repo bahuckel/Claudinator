@@ -136,9 +136,30 @@ when it is:
 | Knob | Range | Default |
 | --- | --- | --- |
 | Suggest `/compact` above | 20k – 10M tokens | 150,000 |
+| Measure the post-compact size | on / off | on |
+| Measure from | any project with compactions | all projects |
 | Context left after `/compact` | 2k – 1M tokens | 20,000 |
 | Call a session idle after | 1 – 2,160 hours | 48 |
 | Keep "Compacted" marks for | 0 – 365 days | 7 |
+
+**The post-compact size is measured, not assumed.** A compaction leaves a
+mark in the transcript — context collapsing between one turn and the next —
+and the turn straight after that drop is metered like any other, so its size
+is simply *what a compacted session weighs*, on your machine, for your
+settings. Claudinator collects every such drop in range and uses the
+**median**, because one of them is usually a context edit that happened to
+clear half the window rather than a real compaction, and a mean would let
+that single outlier move the estimate by tens of thousands of tokens. Under
+three observations it falls back to the number you set by hand and says so.
+
+The **Measure from** dropdown scopes that to one project, listing only
+projects that have actually been compacted, most evidence first, with the
+count beside each name. All projects is usually right: on the corpus this was
+built against, thirteen compactions across five projects gave per-project
+medians of 61k–73k against an overall 68.9k — the figure barely moves, and a
+single project rarely has enough events to beat the pooled one. The savings
+estimate is only as good as this number, and the old fixed default of 20,000
+was low by a factor of three and a half.
 
 The threshold slider says how many sessions in the current range it would list
 *before* you save, so you can find the number you actually want instead of
@@ -316,6 +337,8 @@ are optional:
   "projectRoots": ["~/code/monorepo"],
   "minWorkspaceChildren": 3,
   "compactThresholdTokens": 150000,
+  "compactTargetAuto": true,
+  "compactTargetScope": "*",
   "compactTargetTokens": 20000,
   "compactIdleHours": 48,
   "markRetentionDays": 7,
@@ -331,13 +354,15 @@ are optional:
 | `projectRoots` | Folders to always treat as a single project, even without `.git` and even when many subfolders are in use. |
 | `minWorkspaceChildren` | How many distinct subfolders in use make a folder a workspace automatically. Default `3`. |
 | `compactThresholdTokens` | ⚙ Context size at which a session earns a `/compact` suggestion, and at which it is notified about. Default `150000`. |
-| `compactTargetTokens` | ⚙ Assumed context size after compaction, used for the savings estimate. Kept at least 5,000 below the threshold. Default `20000`. |
+| `compactTargetAuto` | ⚙ Measure the post-compact size from your own compactions rather than using `compactTargetTokens`. Default `true`. |
+| `compactTargetScope` | ⚙ Project whose compactions to measure, or `"*"` for all of them. Default `"*"`. |
+| `compactTargetTokens` | ⚙ Context size after compaction when measuring is off, or when fewer than three compactions have been seen. Kept at least 5,000 below the threshold. Default `20000`. |
 | `compactIdleHours` | ⚙ Sessions idle longer than this are shown dimmed. Default `48`. |
 | `markRetentionDays` | ⚙ Days a "Compacted ✓" mark survives before it is deleted. `0` keeps them forever. Default `7`. |
 | `inferProjectFromPaths` | Attribute workspace-root sessions to a project using the files they touched. Default `true`. |
 
 Keys marked ⚙ are the ones **⚙ Options** edits; the rest are file-only. A save
-rewrites only those four and leaves everything else in the file untouched. If
+rewrites only those keys and leaves everything else in the file untouched. If
 `config.json` is not valid JSON the save is refused rather than overwriting
 whatever you had in there.
 
@@ -356,7 +381,7 @@ The page is a thin client over these endpoints:
 | `GET /api/usage?range=1d\|7d\|30d\|180d\|365d\|all` | Everything the page shows, as JSON. Optional `project`, `agent`, `model`, `session`, `effort` filters. |
 | `GET /api/usage.csv?range=…` | The daily series as CSV. |
 | `POST /api/compact-mark` | Body `{"session":"…","ts":1757000000000}` records a compaction mark; `{"session":"…","clear":true}` removes it. Refuses cross-origin writes. |
-| `GET /api/settings` | The four editable thresholds, their defaults, and the spec the page builds its sliders from (bounds, step, label, help). |
+| `GET /api/settings` | The editable settings, their defaults, and the spec the page builds its controls from (type, bounds, step, label, help). |
 | `POST /api/settings` | Body `{"values":{"compactThresholdTokens":100000}}` writes those keys to `config.json`. Clamps to range, refuses unknown keys and cross-origin writes. |
 | `GET /api/health` | Liveness, version, boot time, the mtime of the loaded code, the configured roots and the pid. |
 
