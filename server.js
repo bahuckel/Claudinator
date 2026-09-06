@@ -5,6 +5,9 @@ const fs = require('fs');
 const path = require('path');
 const {
   loadConfig,
+  saveConfig,
+  tunableValues,
+  TUNABLES,
   loadPricing,
   scan,
   aggregate,
@@ -16,7 +19,10 @@ const {
 } = require('./lib/scan');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
-const cfg = loadConfig();
+// Read once for the things that are fixed for the life of the process (the
+// port it binds, the roots it announces). Every request re-reads the file, so
+// settings changed from the page apply to the next fetch without a restart.
+const bootCfg = loadConfig();
 const pkg = require('./package.json');
 const startedAt = Date.now();
 const codeMtime = Math.max(
@@ -41,6 +47,13 @@ const MIME = {
 function send(res, code, type, body, extra) {
   res.writeHead(code, Object.assign({ 'Content-Type': type, 'Cache-Control': 'no-store' }, extra));
   res.end(body);
+}
+
+/** What "Reset" on the page puts back. */
+function defaultValues() {
+  const out = {};
+  for (const t of TUNABLES) out[t.key] = t.def;
+  return out;
 }
 
 function sendJson(res, code, body) {
@@ -70,7 +83,8 @@ function serveStatic(res, urlPath) {
 }
 
 async function usageFor(range, filter) {
-  const pricing = loadPricing(); // reloaded each fetch so edits apply live
+  const cfg = loadConfig(); // reloaded each fetch so edits apply live
+  const pricing = loadPricing();
   const { records, sessionMeta, toolCalls, stats } = await scan(cfg.roots, cfg);
   const data = aggregate(
     records,
@@ -119,6 +133,25 @@ function readJsonBody(req, cb) {
   req.on('error', (err) => cb(err));
 }
 
+/** POST + same-origin + a JSON body, or the response is already sent. */
+function acceptPost(req, res, cb) {
+  if (req.method !== 'POST') {
+    sendJson(res, 405, { error: 'POST only' });
+    return;
+  }
+  if (!sameOrigin(req)) {
+    sendJson(res, 403, { error: 'cross-origin write refused' });
+    return;
+  }
+  readJsonBody(req, (err, body) => {
+    if (err) {
+      sendJson(res, 400, { error: 'bad JSON body' });
+      return;
+    }
+    cb(body);
+  });
+}
+
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
   const range = url.searchParams.get('range') || '30d';
@@ -153,19 +186,7 @@ const server = http.createServer((req, res) => {
   // Mark a session compacted (or clear the mark): everything before the
   // timestamp stops counting toward its suggestion.
   if (url.pathname === '/api/compact-mark') {
-    if (req.method !== 'POST') {
-      sendJson(res, 405, { error: 'POST only' });
-      return;
-    }
-    if (!sameOrigin(req)) {
-      sendJson(res, 403, { error: 'cross-origin write refused' });
-      return;
-    }
-    readJsonBody(req, (err, body) => {
-      if (err) {
-        sendJson(res, 400, { error: 'bad JSON body' });
-        return;
-      }
+    acceptPost(req, res, (body) => {
       const session = typeof body.session === 'string' ? body.session.slice(0, 200) : '';
       if (!session) {
         sendJson(res, 400, { error: 'session is required' });
@@ -183,6 +204,35 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // The knobs behind the /compact suggestions. GET ships the spec too, so the
+  // page builds its sliders from the same bounds the write path enforces.
+  if (url.pathname === '/api/settings') {
+    if (req.method === 'GET') {
+      let values;
+      try {
+        values = tunableValues();
+      } catch (err) {
+        sendJson(res, 500, { error: 'config.json is not valid JSON: ' + err.message });
+        return;
+      }
+      sendJson(res, 200, { values, defaults: defaultValues(), tunables: TUNABLES });
+      return;
+    }
+    acceptPost(req, res, (body) => {
+      try {
+        const values = saveConfig(body && body.values ? body.values : body);
+        sendJson(res, 200, { ok: true, values });
+      } catch (e) {
+        // A bad key or a broken file is the caller's problem to fix, not a
+        // server fault, so say which and keep the 4xx.
+        const bad = e.code === 'EBADKEY' || e.code === 'EBADVALUE' || e.code === 'EBADCONFIG';
+        if (!bad) console.error(e);
+        sendJson(res, bad ? 400 : 500, { error: e.message });
+      }
+    });
+    return;
+  }
+
   if (url.pathname === '/api/health') {
     sendJson(res, 200, {
       ok: true,
@@ -190,7 +240,7 @@ const server = http.createServer((req, res) => {
       // Code is loaded once at boot; this says which build is actually serving.
       startedAt,
       codeMtime,
-      roots: cfg.roots,
+      roots: bootCfg.roots,
       pid: process.pid,
     });
     return;
@@ -199,9 +249,9 @@ const server = http.createServer((req, res) => {
   serveStatic(res, url.pathname);
 });
 
-server.listen(cfg.port, '127.0.0.1', () => {
-  console.log('Claudinator on http://localhost:' + cfg.port);
-  console.log('Scanning: ' + cfg.roots.join(', '));
+server.listen(bootCfg.port, '127.0.0.1', () => {
+  console.log('Claudinator on http://localhost:' + bootCfg.port);
+  console.log('Scanning: ' + bootCfg.roots.join(', '));
 });
 
 module.exports = server;

@@ -537,6 +537,28 @@ test('context growth is measured exactly and skips compactions', () => {
   assert.deepEqual(g.biggest[0].tools, []);
 });
 
+test('every session reports its context size, not only the ones over the threshold', async () => {
+  const { aggregate } = require('../lib/scan');
+  const now = Date.now();
+  const big = { in: 200, out: 50, cw5: 0, cw1: 0, cr: 400000 };
+  const small = { in: 200, out: 50, cw5: 0, cw1: 0, cr: 1000 };
+  const rec = (session, u) =>
+    Object.assign(
+      { session, project: 'P', model: 'claude-opus-5', speed: null, ts: now - 60000, agentId: null, sidechain: false },
+      u
+    );
+  const records = [rec('hot', big), rec('cold', small)];
+  const data = aggregate(records, '30d', { cacheMultipliers: { write5m: 1.25, write1h: 2, read: 0.1 }, default: { input: 5, output: 25 }, models: {} }, {}, {}, {}, []);
+
+  assert.equal(data.compact.suggestions.length, 1, 'only the big session is suggested');
+  assert.equal(data.compact.suggestions[0].session, 'hot');
+  // Both are still reported, so the page can preview another threshold without
+  // a round trip to the server.
+  assert.equal(data.compact.contextSizes.length, 2);
+  assert.ok(data.compact.contextSizes[0] > data.compact.contextSizes[1], 'biggest first');
+  assert.equal(data.compact.contextSizes[1], 1200);
+});
+
 test('tool inputs yield the directories a session touched', async () => {
   const dir = tmpDir();
   const file = path.join(dir, 'sess-1.jsonl');

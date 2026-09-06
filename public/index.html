@@ -54,6 +54,15 @@
           <div class="notifyrow">
             <button id="notifyToggle" class="ghost small" aria-pressed="false">🔔 Notify me</button>
             <span class="hint" id="notifyHint"></span>
+            <button id="knobsToggle" class="ghost small" aria-expanded="false" aria-controls="knobs">⚙ Tune</button>
+          </div>
+          <div id="knobs" class="knobs" hidden>
+            <div class="knobgrid" id="knobGrid"></div>
+            <div class="knobfoot">
+              <span class="hint" id="knobStatus"></span>
+              <button id="knobReset" class="ghost small">Reset to defaults</button>
+              <button id="knobSave" class="primary small" disabled>Save</button>
+            </div>
           </div>
           <div id="compact"></div>
         </div>

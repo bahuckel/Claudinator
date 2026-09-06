@@ -34,6 +34,10 @@ const state = {
   stack: 'type',
   compactOpen: true,
   marksOpen: false,
+  knobsOpen: false,
+  // { values, defaults, tunables } from /api/settings, plus the unsaved edits.
+  settings: null,
+  draft: {},
   auto: false,
   autoEvery: 60000,
   notify: false,
@@ -60,6 +64,7 @@ function loadPrefs() {
     if (['type', 'project', 'model', 'effort'].includes(p.stack)) state.stack = p.stack;
     if (typeof p.compactOpen === 'boolean') state.compactOpen = p.compactOpen;
     if (typeof p.marksOpen === 'boolean') state.marksOpen = p.marksOpen;
+    if (typeof p.knobsOpen === 'boolean') state.knobsOpen = p.knobsOpen;
     if (typeof p.auto === 'boolean') state.auto = p.auto;
     if (Number.isFinite(p.autoEvery)) state.autoEvery = p.autoEvery;
     if (typeof p.notify === 'boolean') state.notify = p.notify;
@@ -78,6 +83,7 @@ function savePrefs() {
         stack: state.stack,
         compactOpen: state.compactOpen,
         marksOpen: state.marksOpen,
+        knobsOpen: state.knobsOpen,
         auto: state.auto,
         autoEvery: state.autoEvery,
         notify: state.notify,
@@ -611,8 +617,7 @@ function renderCompact() {
   const active = list.filter((s) => !s.idle).length;
   $('compactHint').textContent =
     `${list.length} of ${c.sessionsChecked} sessions carry ≥ ${fmt(c.threshold)} tokens of context` +
-    (list.length ? ` · ${active} active, ${list.length - active} idle` : '') +
-    ' · thresholds in config.json';
+    (list.length ? ` · ${active} active, ${list.length - active} idle` : '');
 
   if (!list.length) {
     host.innerHTML =
@@ -668,6 +673,8 @@ function renderCompact() {
   }
 
   host.innerHTML += markListHtml(c);
+  // The threshold preview counts sessions in the range that was just fetched.
+  if (state.settings) renderKnobs();
   maybeNotify(list);
 }
 
@@ -721,6 +728,166 @@ async function markCompacted(session, clear) {
   delete notified[session];
   saveNotified(notified);
   doFetch();
+}
+
+/* ---------------------------------------------------------------- *
+ * Settings
+ *
+ * The server owns the spec (bounds, defaults, help text) and re-clamps on
+ * write, so this only has to draw it and keep the draft honest.
+ * ---------------------------------------------------------------- */
+
+// Kept in step with TARGET_HEADROOM in lib/scan.js: a target that met the
+// threshold would claim compacting a session saves nothing.
+const TARGET_HEADROOM = 5000;
+
+async function loadSettings() {
+  try {
+    const res = await fetch('/api/settings');
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error || res.statusText);
+    state.settings = body;
+    state.draft = Object.assign({}, body.values);
+    renderKnobs();
+  } catch (err) {
+    $('knobStatus').textContent = 'Could not read the settings: ' + err.message;
+    $('knobGrid').innerHTML = '';
+  }
+}
+
+/** The ceiling a knob really has, once the other knobs are taken into account. */
+function knobMax(t) {
+  if (t.key !== 'compactTargetTokens') return t.max;
+  const thr = state.draft.compactThresholdTokens;
+  return Math.max(t.min, Math.min(t.max, thr - TARGET_HEADROOM));
+}
+
+function renderKnobs() {
+  const st = state.settings;
+  if (!st) return;
+  $('knobGrid').innerHTML = st.tunables
+    .map((t) => {
+      const max = knobMax(t);
+      const v = Math.min(state.draft[t.key], max);
+      return (
+        `<div class="knob" data-key="${esc(t.key)}">` +
+        `<label for="n_${esc(t.key)}">${esc(t.label)}</label>` +
+        `<div class="knobin">` +
+        `<input type="range" data-knob="${esc(t.key)}" min="${t.min}" max="${max}" ` +
+        `step="${t.step}" value="${v}" aria-label="${esc(t.label)}">` +
+        `<input type="number" id="n_${esc(t.key)}" data-knob="${esc(t.key)}" min="${t.min}" ` +
+        `max="${max}" step="${t.step}" value="${v}">` +
+        `<span class="unit">${esc(t.unit)}</span>` +
+        `</div>` +
+        `<div class="knobnote" data-note="${esc(t.key)}">${knobNote(t, v)}</div>` +
+        `<div class="knobhelp">${esc(t.help)}</div>` +
+        `</div>`
+      );
+    })
+    .join('');
+  syncKnobFoot();
+}
+
+/** The one line under a slider that says what the number actually does. */
+function knobNote(t, v) {
+  if (t.key === 'compactThresholdTokens') {
+    const sizes = (state.data && state.data.compact && state.data.compact.contextSizes) || null;
+    if (!sizes) return `<b>${esc(fmt(v))}</b> tokens of context`;
+    const hits = sizes.filter((c) => c >= v).length;
+    return (
+      `<b>${full(hits)}</b> of ${full(sizes.length)} session${sizes.length === 1 ? '' : 's'} ` +
+      `in this range would be listed`
+    );
+  }
+  if (t.key === 'compactTargetTokens') {
+    const thr = state.draft.compactThresholdTokens;
+    return `a session at the threshold would be shown saving ${esc(fmt(Math.max(0, thr - v)))} tokens per turn`;
+  }
+  if (t.key === 'compactIdleHours') {
+    return v >= 48 ? `${esc((v / 24).toFixed(v % 24 ? 1 : 0))} days` : `${v} hour${v === 1 ? '' : 's'}`;
+  }
+  if (t.key === 'markRetentionDays') {
+    return v === 0 ? 'kept until you undo them' : `${v} day${v === 1 ? '' : 's'}`;
+  }
+  return '';
+}
+
+function knobsDirty() {
+  const st = state.settings;
+  if (!st) return false;
+  return st.tunables.some((t) => state.draft[t.key] !== st.values[t.key]);
+}
+
+function syncKnobFoot() {
+  const st = state.settings;
+  const dirty = knobsDirty();
+  $('knobSave').disabled = !dirty;
+  const atDefaults =
+    st && st.tunables.every((t) => state.draft[t.key] === st.defaults[t.key]);
+  $('knobReset').disabled = !st || atDefaults;
+  if (!$('knobStatus').dataset.sticky) {
+    $('knobStatus').textContent = dirty ? 'Unsaved changes.' : '';
+  }
+}
+
+function setKnob(key, raw) {
+  const t = state.settings.tunables.find((x) => x.key === key);
+  if (!t) return;
+  const max = knobMax(t);
+  let v = Number(raw);
+  if (!Number.isFinite(v)) v = state.draft[key];
+  v = Math.min(max, Math.max(t.min, Math.round(v)));
+  state.draft[key] = v;
+
+  // The threshold moves the target's ceiling, so that row is redrawn whole
+  // rather than left showing a range it no longer has.
+  if (key === 'compactThresholdTokens') {
+    const tgt = state.settings.tunables.find((x) => x.key === 'compactTargetTokens');
+    state.draft.compactTargetTokens = Math.min(state.draft.compactTargetTokens, knobMax(tgt));
+    delete $('knobStatus').dataset.sticky;
+    renderKnobs();
+    return;
+  }
+
+  for (const el of document.querySelectorAll(`[data-knob="${key}"]`)) {
+    if (el.value !== String(v)) el.value = String(v);
+  }
+  const note = document.querySelector(`[data-note="${key}"]`);
+  if (note) note.innerHTML = knobNote(t, v);
+  delete $('knobStatus').dataset.sticky;
+  syncKnobFoot();
+}
+
+async function saveKnobs() {
+  const btn = $('knobSave');
+  btn.disabled = true;
+  $('knobStatus').textContent = 'Saving…';
+  try {
+    const res = await fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ values: state.draft }),
+    });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error || res.statusText);
+    state.settings.values = body.values;
+    state.draft = Object.assign({}, body.values);
+    $('knobStatus').dataset.sticky = '1';
+    $('knobStatus').textContent = 'Saved to config.json.';
+    renderKnobs();
+    // Thresholds decide which sessions are listed, so the panel is now stale.
+    doFetch();
+  } catch (err) {
+    $('knobStatus').dataset.sticky = '1';
+    $('knobStatus').textContent = 'Could not save: ' + err.message;
+    syncKnobFoot();
+  }
+}
+
+function applyKnobsFold() {
+  $('knobs').hidden = !state.knobsOpen;
+  $('knobsToggle').setAttribute('aria-expanded', String(state.knobsOpen));
+  $('knobsToggle').classList.toggle('on', state.knobsOpen);
 }
 
 /* ---------------------------------------------------------------- *
@@ -1262,6 +1429,31 @@ $('compact').addEventListener('toggle', (e) => {
 
 $('notifyToggle').addEventListener('click', toggleNotify);
 
+$('knobsToggle').addEventListener('click', () => {
+  state.knobsOpen = !state.knobsOpen;
+  applyKnobsFold();
+  savePrefs();
+  if (state.knobsOpen && !state.settings) loadSettings();
+});
+
+// `input` for the live drag, `change` for a typed number committed with Enter
+// or a blur; both land in the same clamp.
+for (const ev of ['input', 'change']) {
+  $('knobs').addEventListener(ev, (e) => {
+    const el = e.target.closest('[data-knob]');
+    if (el) setKnob(el.dataset.knob, el.value);
+  });
+}
+
+$('knobSave').addEventListener('click', saveKnobs);
+
+$('knobReset').addEventListener('click', () => {
+  if (!state.settings) return;
+  state.draft = Object.assign({}, state.settings.defaults);
+  delete $('knobStatus').dataset.sticky;
+  renderKnobs();
+});
+
 $('autoToggle').addEventListener('click', () => {
   state.auto = !state.auto;
   savePrefs();
@@ -1312,6 +1504,8 @@ buildRanges();
 syncSeg($('metricToggle'), 'metric', state.metric);
 syncSeg($('stackToggle'), 'stack', state.stack);
 applyCompactFold();
+applyKnobsFold();
+if (state.knobsOpen) loadSettings();
 syncAuto();
 syncNotifyUi();
 doFetch();

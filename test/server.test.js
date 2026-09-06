@@ -135,6 +135,75 @@ test('/api/compact-mark writes, clears, and refuses bad callers', async () => {
   }
 });
 
+test('/api/settings reads the knobs, and clamps what it is asked to write', async () => {
+  const cfgFile = path.join(ROOT, 'config.json');
+  const had = fs.existsSync(cfgFile) ? fs.readFileSync(cfgFile) : null;
+  const post = (body, headers) =>
+    fetch(BASE + '/api/settings', {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, headers),
+      body: typeof body === 'string' ? body : JSON.stringify(body),
+    });
+  try {
+    // A key the page never touches, to prove a save does not eat it.
+    fs.writeFileSync(cfgFile, JSON.stringify({ minWorkspaceChildren: 4 }, null, 2));
+
+    const got = await fetch(BASE + '/api/settings');
+    assert.equal(got.status, 200);
+    const spec = await got.json();
+    assert.equal(spec.values.compactThresholdTokens, 150000, 'default threshold');
+    assert.equal(spec.defaults.markRetentionDays, 7);
+    const keys = spec.tunables.map((t) => t.key);
+    assert.deepEqual(keys.sort(), [
+      'compactIdleHours',
+      'compactTargetTokens',
+      'compactThresholdTokens',
+      'markRetentionDays',
+    ]);
+    for (const t of spec.tunables) {
+      assert.ok(t.min < t.max, t.key + ' has a usable range');
+      assert.ok(t.label && t.help && t.unit, t.key + ' is fully described');
+    }
+
+    const saved = await post({ values: { compactTargetTokens: 100000, compactIdleHours: 6 } });
+    assert.equal(saved.status, 200);
+    const after = (await saved.json()).values;
+    assert.equal(after.compactTargetTokens, 100000);
+    assert.equal(after.compactIdleHours, 6);
+    assert.equal(JSON.parse(fs.readFileSync(cfgFile, 'utf8')).minWorkspaceChildren, 4);
+
+    // Dropping the threshold under a target saved earlier has to pull that
+    // target down with it, or the panel would claim compacting saves nothing.
+    const lowered = await post({ values: { compactThresholdTokens: 60000 } });
+    const pulled = (await lowered.json()).values;
+    assert.equal(pulled.compactThresholdTokens, 60000);
+    assert.equal(pulled.compactTargetTokens, 55000);
+
+    const wild = await post({ values: { compactThresholdTokens: 99999999, markRetentionDays: -5 } });
+    const clamped = (await wild.json()).values;
+    assert.equal(clamped.compactThresholdTokens, 1000000, 'clamped to the range top');
+    assert.equal(clamped.markRetentionDays, 0, 'clamped to the range floor');
+
+    const bare = await post({ compactIdleHours: 99 }); // no `values` wrapper
+    assert.equal((await bare.json()).values.compactIdleHours, 99);
+
+    assert.equal((await post({ values: { port: 9999 } })).status, 400, 'unknown key refused');
+    assert.equal((await post({ values: { compactIdleHours: 'lots' } })).status, 400);
+    assert.equal((await fetch(BASE + '/api/settings', { method: 'DELETE' })).status, 405);
+    assert.equal((await post({ values: {} }, { Origin: 'https://evil.example' })).status, 403);
+
+    // A hand-broken file must not be silently overwritten with our own.
+    fs.writeFileSync(cfgFile, '{ this is not json');
+    const broken = await post({ values: { compactIdleHours: 12 } });
+    assert.equal(broken.status, 400);
+    assert.match((await broken.json()).error, /not valid JSON/);
+    assert.equal(fs.readFileSync(cfgFile, 'utf8'), '{ this is not json', 'left alone');
+  } finally {
+    if (had) fs.writeFileSync(cfgFile, had);
+    else fs.rmSync(cfgFile, { force: true });
+  }
+});
+
 test('rejects an oversized request body', async () => {
   const res = await fetch(BASE + '/api/compact-mark', {
     method: 'POST',

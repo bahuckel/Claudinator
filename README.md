@@ -129,6 +129,25 @@ at which point the session counts from its beginning again; expired marks are
 deleted from the file, not merely hidden. Marks live in `compact-marks.json`
 next to `server.js` (gitignored).
 
+**⚙ Tune** opens the four thresholds this whole panel runs on and lets you set
+them from the page:
+
+| Knob | Range | Default |
+| --- | --- | --- |
+| Suggest `/compact` above | 20k – 1M tokens | 150,000 |
+| Context left after `/compact` | 2k – 200k tokens | 20,000 |
+| Call a session idle after | 1 – 2,160 hours | 48 |
+| Keep "Compacted" marks for | 0 – 365 days | 7 |
+
+The threshold slider says how many sessions in the current range it would list
+*before* you save, so you can find the number you actually want instead of
+guessing and refetching. The target is always kept at least 5,000 tokens below
+the threshold, since a target that met it would claim compacting saves nothing.
+Values are clamped to their range rather than rejected, **Reset to defaults**
+puts all four back, and **Save** writes them to `config.json` and refetches —
+no restart. Notifications ride on the same threshold, so raising it makes them
+rarer and lowering it makes them chattier.
+
 The panel header stays visible when collapsed, so the count is always at hand.
 
 ### Daily usage chart
@@ -282,8 +301,11 @@ numbers — it is re-read on every fetch, so no restart is needed.
 
 ## Configuration
 
-Everything works with no configuration. To change something, create a
-`config.json` next to `server.js` (it is gitignored); all keys are optional:
+Everything works with no configuration. The four `/compact` thresholds are
+editable from the page itself — **⚙ Tune** in the suggestions panel writes them
+to the same file — so the only reason to open `config.json` by hand is the
+rest of the keys. Create it next to `server.js` (it is gitignored); all keys
+are optional:
 
 ```json
 {
@@ -307,25 +329,34 @@ Everything works with no configuration. To change something, create a
 | `workspaces` | Folders to always treat as containers of projects rather than projects. |
 | `projectRoots` | Folders to always treat as a single project, even without `.git` and even when many subfolders are in use. |
 | `minWorkspaceChildren` | How many distinct subfolders in use make a folder a workspace automatically. Default `3`. |
-| `compactThresholdTokens` | Context size at which a session earns a `/compact` suggestion. Default `150000`. |
-| `compactTargetTokens` | Assumed context size after compaction, used for the savings estimate. Default `20000`. |
-| `compactIdleHours` | Sessions idle longer than this are shown dimmed. Default `48`. |
-| `markRetentionDays` | Days a "Compacted ✓" mark survives before it is deleted. `0` keeps them forever. Default `7`. |
+| `compactThresholdTokens` | ⚙ Context size at which a session earns a `/compact` suggestion, and at which it is notified about. Default `150000`. |
+| `compactTargetTokens` | ⚙ Assumed context size after compaction, used for the savings estimate. Kept at least 5,000 below the threshold. Default `20000`. |
+| `compactIdleHours` | ⚙ Sessions idle longer than this are shown dimmed. Default `48`. |
+| `markRetentionDays` | ⚙ Days a "Compacted ✓" mark survives before it is deleted. `0` keeps them forever. Default `7`. |
 | `inferProjectFromPaths` | Attribute workspace-root sessions to a project using the files they touched. Default `true`. |
 
+Keys marked ⚙ are the ones **⚙ Tune** edits; the rest are file-only. A save
+rewrites only those four and leaves everything else in the file untouched. If
+`config.json` is not valid JSON the save is refused rather than overwriting
+whatever you had in there.
+
 `CLAUDINATOR_ROOTS` (path-delimiter separated) and `PORT` override the file.
+Both are read at boot; everything else is re-read on each fetch, so edits —
+from the page or from an editor — apply without a restart.
 
 ---
 
 ## API
 
-The page is a thin client over three endpoints:
+The page is a thin client over these endpoints:
 
 | Endpoint | Returns |
 | --- | --- |
 | `GET /api/usage?range=1d\|7d\|30d\|180d\|365d\|all` | Everything the page shows, as JSON. Optional `project`, `agent`, `model`, `session`, `effort` filters. |
 | `GET /api/usage.csv?range=…` | The daily series as CSV. |
 | `POST /api/compact-mark` | Body `{"session":"…","ts":1757000000000}` records a compaction mark; `{"session":"…","clear":true}` removes it. Refuses cross-origin writes. |
+| `GET /api/settings` | The four editable thresholds, their defaults, and the spec the page builds its sliders from (bounds, step, label, help). |
+| `POST /api/settings` | Body `{"values":{"compactThresholdTokens":100000}}` writes those keys to `config.json`. Clamps to range, refuses unknown keys and cross-origin writes. |
 | `GET /api/health` | Liveness, version, boot time, the mtime of the loaded code, the configured roots and the pid. |
 
 ---
