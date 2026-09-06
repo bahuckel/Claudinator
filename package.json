@@ -1,6 +1,6 @@
 {
   "name": "claudinator",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "private": true,
   "description": "Local dashboard for Claude Code token usage, read from ~/.claude/projects transcripts",
   "author": "Bahuckel",

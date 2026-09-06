@@ -179,9 +179,9 @@ test('/api/settings reads the knobs, and clamps what it is asked to write', asyn
     assert.equal(pulled.compactThresholdTokens, 60000);
     assert.equal(pulled.compactTargetTokens, 55000);
 
-    const wild = await post({ values: { compactThresholdTokens: 99999999, markRetentionDays: -5 } });
+    const wild = await post({ values: { compactThresholdTokens: 999999999, markRetentionDays: -5 } });
     const clamped = (await wild.json()).values;
-    assert.equal(clamped.compactThresholdTokens, 1000000, 'clamped to the range top');
+    assert.equal(clamped.compactThresholdTokens, 10000000, 'clamped to the range top');
     assert.equal(clamped.markRetentionDays, 0, 'clamped to the range floor');
 
     const bare = await post({ compactIdleHours: 99 }); // no `values` wrapper

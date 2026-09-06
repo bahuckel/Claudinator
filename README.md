@@ -135,8 +135,8 @@ when it is:
 
 | Knob | Range | Default |
 | --- | --- | --- |
-| Suggest `/compact` above | 20k – 1M tokens | 150,000 |
-| Context left after `/compact` | 2k – 200k tokens | 20,000 |
+| Suggest `/compact` above | 20k – 10M tokens | 150,000 |
+| Context left after `/compact` | 2k – 1M tokens | 20,000 |
 | Call a session idle after | 1 – 2,160 hours | 48 |
 | Keep "Compacted" marks for | 0 – 365 days | 7 |
 

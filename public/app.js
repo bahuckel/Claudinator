@@ -673,8 +673,7 @@ function renderCompact() {
   }
 
   host.innerHTML += markListHtml(c);
-  // The threshold preview counts sessions in the range that was just fetched.
-  if (state.settings) renderKnobs();
+  refreshKnobNotes();
   maybeNotify(list);
 }
 
@@ -831,31 +830,53 @@ function syncKnobFoot() {
 }
 
 function setKnob(key, raw) {
-  const t = state.settings.tunables.find((x) => x.key === key);
+  const t = tunable(key);
   if (!t) return;
   const max = knobMax(t);
   let v = Number(raw);
   if (!Number.isFinite(v)) v = state.draft[key];
   v = Math.min(max, Math.max(t.min, Math.round(v)));
   state.draft[key] = v;
+  paintKnob(t, v);
 
-  // The threshold moves the target's ceiling, so that row is redrawn whole
-  // rather than left showing a range it no longer has.
+  // The threshold moves the target's ceiling, so that row has to follow. It is
+  // updated in place: rebuilding the grid here would replace the very slider
+  // the pointer is holding, and the drag would die after its first step.
   if (key === 'compactThresholdTokens') {
-    const tgt = state.settings.tunables.find((x) => x.key === 'compactTargetTokens');
-    state.draft.compactTargetTokens = Math.min(state.draft.compactTargetTokens, knobMax(tgt));
-    delete $('knobStatus').dataset.sticky;
-    renderKnobs();
-    return;
+    const tgt = tunable('compactTargetTokens');
+    const tgtMax = knobMax(tgt);
+    for (const el of document.querySelectorAll('[data-knob="compactTargetTokens"]')) {
+      el.max = String(tgtMax);
+    }
+    state.draft.compactTargetTokens = Math.min(state.draft.compactTargetTokens, tgtMax);
+    paintKnob(tgt, state.draft.compactTargetTokens);
   }
 
-  for (const el of document.querySelectorAll(`[data-knob="${key}"]`)) {
-    if (el.value !== String(v)) el.value = String(v);
-  }
-  const note = document.querySelector(`[data-note="${key}"]`);
-  if (note) note.innerHTML = knobNote(t, v);
   delete $('knobStatus').dataset.sticky;
   syncKnobFoot();
+}
+
+function tunable(key) {
+  return state.settings && state.settings.tunables.find((x) => x.key === key);
+}
+
+/** Push one knob's value into its two inputs and refresh its note. */
+function paintKnob(t, v) {
+  for (const el of document.querySelectorAll(`[data-knob="${t.key}"]`)) {
+    if (el.value !== String(v)) el.value = String(v);
+  }
+  const note = document.querySelector(`[data-note="${t.key}"]`);
+  if (note) note.innerHTML = knobNote(t, v);
+}
+
+/**
+ * The threshold note counts sessions in the range that was last fetched, so a
+ * new fetch changes the answer. Only the notes are repainted: a full redraw
+ * would throw away a slider the pointer might be on.
+ */
+function refreshKnobNotes() {
+  if (!state.settings) return;
+  for (const t of state.settings.tunables) paintKnob(t, state.draft[t.key]);
 }
 
 async function saveKnobs() {
