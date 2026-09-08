@@ -232,6 +232,20 @@ or a backup root is deduped the same way, so adding backup folders is safe.
 `<synthetic>` messages — local errors, interrupts — are not API calls and are
 skipped.
 
+**Which copy of a duplicate wins.** Resuming or compacting a session does not
+continue the old transcript: it starts a new one and copies the history in,
+rewriting each copied line's `cwd` and `sessionId` to the fork's. On the corpus
+this was built against, **half of all API calls exist in two to eight files**,
+carrying 47% of the tokens — so the copy that wins decides which project
+roughly half your usage is filed under.
+
+The winner is the copy in the transcript that **starts earliest**, because a
+fork cannot predate the conversation it copied. A copy whose usage has been
+zeroed out never wins, whatever its age: a stub is not the record of an API
+call. Before this rule the winner was whichever file the directory walk reached
+first, which put 466M tokens (+28.5%) in a workspace bucket that belonged to
+the projects underneath it.
+
 **Projects.** A session's `cwd` is often a subfolder (`myrepo/src/client`), so
 each cwd is rolled up:
 
@@ -310,6 +324,9 @@ estimates and per-turn growth is offered as the measured number beside them.
 Costs are computed locally from `pricing.json` (USD per 1M tokens, first-party
 Anthropic API rates) with the standard cache multipliers: a 5-minute cache write
 costs 1.25× the input rate, a 1-hour cache write 2×, and a cache read 0.1×.
+A model named by a dated snapshot id (`claude-sonnet-4-5-20250929`) is priced as
+the model it is; only a genuinely unrecognised name falls back to `default`, and
+those are called out in the unknown-model banner.
 Fast-mode responses use the `fast` rates where a model defines them, and server
 tools are billed per 1,000 requests from the `serverTools` block (web search
 $10/1k; web fetch has no per-request fee — its content arrives as input tokens

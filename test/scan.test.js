@@ -12,6 +12,7 @@ const {
   costOf,
   cacheWaste,
   aggregate,
+  scan,
   toCsv,
 } = require('../lib/scan');
 
@@ -122,6 +123,96 @@ test('costOf applies cache multipliers and fast-mode rates', () => {
   assert.equal(Number(costOf(rec, PRICING).toFixed(2)), 46.75);
   assert.equal(Number(costOf(Object.assign({}, rec, { speed: 'fast' }), PRICING).toFixed(2)), 93.5);
   assert.equal(costOf(Object.assign({}, rec, { model: 'unknown-model' }), PRICING), 0);
+});
+
+test('a forked transcript does not steal the tokens it copied', async () => {
+  // Resuming a session copies the history into a new file and rewrites each
+  // copied line's cwd and sessionId. Both files then hold the same API call,
+  // and whichever the directory walk reaches first used to decide which
+  // project got charged for it.
+  const root = tmpDir();
+  const call = (over) =>
+    assistant(
+      Object.assign(
+        {
+          requestId: 'req-shared',
+          message: Object.assign(assistant().message, { id: 'msg-shared' }),
+        },
+        over
+      )
+    );
+
+  // Walked first (alphabetical), but it is the fork: it starts two days later.
+  writeJsonl(path.join(root, 'a-fork.jsonl'), [
+    call({
+      sessionId: 'sess-fork',
+      cwd: 'C:\\work\\Workspace',
+      timestamp: '2026-09-06T09:00:00.000Z',
+    }),
+  ]);
+  // Walked second, but this is where the call was actually made.
+  writeJsonl(path.join(root, 'z-original.jsonl'), [
+    call({
+      sessionId: 'sess-real',
+      cwd: 'C:\\work\\Workspace\\Alpha',
+      timestamp: '2026-09-04T09:00:00.000Z',
+    }),
+  ]);
+
+  const out = await scan([root], { inferProjectFromPaths: false });
+  assert.equal(out.records.length, 1, 'the copy is still deduped away');
+  assert.equal(out.records[0].session, 'sess-real');
+  assert.equal(out.records[0].cwd, 'C:\\work\\Workspace\\Alpha');
+});
+
+test('a copy with its usage zeroed never outranks the real record', async () => {
+  // A fork can carry a message in as a stub. Being older does not make a stub
+  // the record of an API call.
+  const root = tmpDir();
+  const zeroed = assistant({
+    sessionId: 'sess-stub',
+    cwd: 'C:\\work\\Workspace',
+    timestamp: '2026-09-01T09:00:00.000Z',
+    requestId: 'req-shared',
+  });
+  zeroed.message.id = 'msg-shared';
+  zeroed.message.usage = {
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_creation_input_tokens: 0,
+    cache_read_input_tokens: 0,
+  };
+  const real = assistant({
+    sessionId: 'sess-real',
+    cwd: 'C:\\work\\Workspace\\Alpha',
+    timestamp: '2026-09-05T09:00:00.000Z',
+    requestId: 'req-shared',
+  });
+  real.message.id = 'msg-shared';
+
+  writeJsonl(path.join(root, 'a-stub.jsonl'), [zeroed]);
+  writeJsonl(path.join(root, 'z-real.jsonl'), [real]);
+
+  const out = await scan([root], { inferProjectFromPaths: false });
+  assert.equal(out.records.length, 1);
+  assert.equal(out.records[0].session, 'sess-real');
+  assert.equal(out.records[0].out, 20, 'the real usage survived');
+});
+
+test('a dated model id is priced as the model, not as the default', () => {
+  // The default rate is Opus-tier, so a Sonnet that fell through to it would
+  // be billed 67% over list.
+  const pricing = {
+    cacheMultipliers: { write5m: 1.25, write1h: 2, read: 0.1 },
+    default: { input: 5, output: 25 },
+    models: { 'claude-sonnet-4-5': { input: 3, output: 15 } },
+  };
+  const rec = { model: 'claude-sonnet-4-5-20250929', speed: 'standard', in: 1e6, out: 0, cw5: 0, cw1: 0, cr: 0 };
+  assert.equal(costOf(rec, pricing), 3, 'the date suffix is dropped');
+  const plain = Object.assign({}, rec, { model: 'claude-sonnet-4-5' });
+  assert.equal(costOf(plain, pricing), 3);
+  const unknown = Object.assign({}, rec, { model: 'claude-unheard-of-9' });
+  assert.equal(costOf(unknown, pricing), 5, 'a genuinely unknown model still falls back');
 });
 
 test('project resolver rolls subfolders up to the git root or project folder', () => {
