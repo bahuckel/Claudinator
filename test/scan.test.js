@@ -767,6 +767,41 @@ test('tool inputs yield the directories a session touched', async () => {
   assert.equal(hits['C:\\work\\My Proj\\lib'], 1);
 });
 
+test('a file path collapses to its folder on either separator, root included', async () => {
+  const root = tmpDir();
+  const call = (input) => ({
+    type: 'assistant',
+    uuid: 'u-paths',
+    sessionId: 'sess-paths',
+    timestamp: '2026-09-04T10:00:00.000Z',
+    cwd: 'C:\\work',
+    message: {
+      id: 'msg-paths',
+      model: 'claude-opus-5',
+      content: [{ type: 'tool_use', id: 't1', name: 'Read', input }],
+    },
+  });
+  const B = String.fromCharCode(92);
+  writeJsonl(path.join(root, 's.jsonl'), [
+    call({ file_path: 'C:' + B + 'work' + B + 'Alpha' + B + 'src' + B + 'a.js' }),
+    call({ file_path: '/home/u/proj/b.js' }),
+    call({ file_path: 'C:' + B + 'root.js' }),
+    call({ file_path: '/root.js' }),
+    call({ file_path: '/home/u/proj' }),
+  ]);
+
+  const out = await parseFile(path.join(root, 's.jsonl'));
+  const hits = out.pathHits['sess-paths'];
+  // Separator-agnostic: a Windows path must survive on a POSIX host too.
+  assert.equal(hits['C:' + B + 'work' + B + 'Alpha' + B + 'src'], 1);
+  assert.equal(hits['/home/u/proj'], 2, 'the file and the bare folder land together');
+  // Root-level files keep a separator rather than collapsing to "" or "C:".
+  assert.equal(hits['C:' + B], 1);
+  assert.equal(hits['/'], 1);
+  assert.equal(hits[''], undefined, 'no empty bucket');
+  assert.equal(hits['.'], undefined, 'and never a relative one');
+});
+
 test('a session run from a workspace folder is attributed by the files it touched', async () => {
   const { scan } = require('../lib/scan');
   const ws = tmpDir();
