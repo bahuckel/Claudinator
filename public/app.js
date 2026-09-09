@@ -94,9 +94,24 @@ function savePrefs() {
   }
 }
 
+/**
+ * What has already been raised about each session, so the same one does not
+ * arrive as a fresh surprise every time its context grows.
+ *
+ * `{ session: { at, n, first } }` - the context size it last fired at, how
+ * many times it has fired, and when it started. Entries written before this
+ * was a tally are a bare number; they are read as one alert at that size.
+ */
 function loadNotified() {
   try {
-    return JSON.parse(localStorage.getItem(NOTIFIED_KEY) || '{}');
+    const raw = JSON.parse(localStorage.getItem(NOTIFIED_KEY) || '{}');
+    const out = {};
+    for (const k in raw) {
+      const v = raw[k];
+      if (typeof v === 'number') out[k] = { at: v, n: 1, first: null };
+      else if (v && typeof v === 'object') out[k] = { at: v.at || 0, n: v.n || 1, first: v.first || null };
+    }
+    return out;
   } catch {
     return {};
   }
@@ -615,6 +630,10 @@ function renderCompact() {
   const host = $('compact');
   const list = c.suggestions;
   const active = list.filter((s) => !s.idle).length;
+  // Raised before the cards are built, so a session's tally includes the
+  // alert this very refresh just sent rather than trailing it by one.
+  maybeNotify(list);
+  const raised = loadNotified();
   $('compactHint').textContent =
     `${list.length} of ${c.sessionsChecked} sessions carry ≥ ${fmt(c.threshold)} tokens of context` +
     (list.length ? ` · ${active} active, ${list.length - active} idle` : '');
@@ -638,6 +657,16 @@ function renderCompact() {
             const comp = s.compactions
               ? `<span class="badge" title="last one ${ago(s.lastCompaction)}">compacted ${s.compactions}×</span>`
               : '';
+            // Every alert this session has produced, collapsed onto the one
+            // card instead of arriving as a fresh nag each time.
+            const seen = raised[s.session];
+            const nag =
+              seen && seen.n > 1
+                ? `<span class="badge nag" title="${esc(
+                    'first raised ' + (seen.first ? ago(seen.first) : 'earlier') +
+                      ' — clears when you mark it compacted'
+                  )}">asked ${seen.n}×</span>`
+                : '';
             const idle = s.idle ? `<span class="badge">idle ${Math.round(s.idleHours / 24)}d</span>` : '';
             const tax = s.costPerMsgNow ? Math.min(0.99, s.savePerMsg / s.costPerMsgNow) : 0;
             const growth = tax ? ` — ${Math.round(tax * 100)}% of it is re-reading context` : '';
@@ -654,7 +683,7 @@ function renderCompact() {
               : '';
             return (
               `<div class="cs${s.idle ? ' idle' : ''}" title="${esc(s.session)}">` +
-              `<div><div class="t">${esc(title)}${comp}${idle}</div>` +
+              `<div><div class="t">${esc(title)}${comp}${nag}${idle}</div>` +
               `<div class="sm">${full(s.messages)} turns · ${full(s.turnsAboveThreshold)} over the threshold · last ${ago(s.lastActivity)}</div>` +
               `${since}${tools}</div>` +
               `<div><div class="big">${fmt(s.contextNow)}</div><div class="sm">context per turn · peak ${fmt(s.contextPeak)}</div>` +
@@ -674,7 +703,6 @@ function renderCompact() {
 
   host.innerHTML += markListHtml(c);
   refreshKnobNotes();
-  maybeNotify(list);
 }
 
 // Marks are already newest-first from the server; they expire on their own, so
@@ -1136,10 +1164,16 @@ function maybeNotify(list) {
   const fresh = [];
   for (const s of list) {
     if (s.idle) continue;
-    const seenAt = notified[s.session];
-    if (seenAt === undefined || s.contextNow >= seenAt * 2) {
+    const seen = notified[s.session];
+    // A session already raised only comes back once it has doubled again;
+    // short of that it stays on its card with the tally below.
+    if (seen === undefined || s.contextNow >= seen.at * 2) {
       fresh.push(s);
-      notified[s.session] = s.contextNow;
+      notified[s.session] = {
+        at: s.contextNow,
+        n: (seen ? seen.n : 0) + 1,
+        first: (seen && seen.first) || Date.now(),
+      };
       changed = true;
     }
   }
@@ -1153,9 +1187,12 @@ function maybeNotify(list) {
   if (!fresh.length) return;
 
   const top = fresh.sort((a, b) => b.savePerMsg - a.savePerMsg)[0];
+  const times = notified[top.session].n;
   const title =
     fresh.length === 1
-      ? 'Session needs /compact'
+      ? times > 1
+        ? `Still needs /compact (${times}×)`
+        : 'Session needs /compact'
       : `${fresh.length} sessions need /compact`;
   const body =
     `${(top.title || top.session.slice(0, 8)).slice(0, 60)} — ${fmt(top.contextNow)} tokens of context, ` +

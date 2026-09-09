@@ -115,6 +115,13 @@ already flagged has doubled its context since the last alert. It is per-browser,
 off by default, and only fires on a fetch — pair it with **AUTO** so it can
 check without you. Marking a session compacted resets its alert.
 
+Repeats are collapsed onto the card rather than piling up as separate alerts.
+A session that has been raised more than once carries an **asked N×** badge
+saying how many times, and hovering it gives the date of the first one; the
+notification itself says *Still needs /compact (3×)* instead of arriving as if
+it were news. The tally clears when you mark the session compacted, or when it
+falls back under the threshold on its own.
+
 Each card has a **Compacted ✓** button. Press it after you actually run
 `/compact` in that session: the click timestamp is recorded, and from then on
 only turns *after* it count toward the suggestion. The card disappears until

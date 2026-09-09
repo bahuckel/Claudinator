@@ -667,6 +667,13 @@ kbd {
   vertical-align: middle;
 }
 
+/* A suggestion that has been raised more than once: the tally lives on the
+   card so repeats do not have to arrive as separate alerts. */
+.badge.nag {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+}
+
 @media (max-width: 800px) {
   .cs {
     grid-template-columns: 1fr 1fr;
