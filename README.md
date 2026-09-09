@@ -239,6 +239,24 @@ or a backup root is deduped the same way, so adding backup folders is safe.
 `<synthetic>` messages — local errors, interrupts — are not API calls and are
 skipped.
 
+**One conversation, not one transcript.** The same resume that duplicates
+records also mints a new `sessionId`, so a conversation carried through three
+compactions is three sessions as far as the transcript is concerned — and two
+of them no longer exist to run anything in. Sessions are folded back into one
+conversation before any suggestion is made: a session is superseded when
+another one holds **at least half its calls** and went on working after it, and
+following that to the end of the chain gives the session still live today.
+
+On the corpus this was built against that turned 76 session ids into 34
+conversations, and cut the `/compact` panel from 24 cards to 9 — the other 15
+were dead forks of conversations already listed. A folded card carries a
+**+2 resumed** badge naming the transcripts behind it.
+
+`session` itself is untouched: marks, filters and drill-down stay keyed on the
+real transcript id, and a mark on *any* session in a chain silences the whole
+conversation, since you marked the conversation compacted whichever of its ids
+happened to be on screen.
+
 **Which copy of a duplicate wins.** Resuming or compacting a session does not
 continue the old transcript: it starts a new one and copies the history in,
 rewriting each copied line's `cwd` and `sessionId` to the fork's. On the corpus

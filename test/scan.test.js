@@ -165,6 +165,104 @@ test('a forked transcript does not steal the tokens it copied', async () => {
   assert.equal(out.records[0].cwd, 'C:\\work\\Workspace\\Alpha');
 });
 
+test('a conversation resumed into new sessions is one suggestion, not three', async () => {
+  // Resuming mints a new sessionId and copies the history across, so one
+  // conversation becomes several transcripts. Only the last of them still
+  // exists to run /compact in; suggesting it on the other two is noise.
+  const root = tmpDir();
+  const base = Date.parse('2026-09-04T10:00:00.000Z');
+  const call = (session, i, over) => {
+    const rec = assistant(
+      Object.assign(
+        {
+          sessionId: session,
+          requestId: 'req-' + i,
+          timestamp: new Date(base + i * 60000).toISOString(),
+        },
+        over
+      )
+    );
+    rec.message.id = 'msg-' + i;
+    rec.message.usage = {
+      input_tokens: 0,
+      output_tokens: 50,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 300000,
+    };
+    return rec;
+  };
+  const run = (session, from, to) => {
+    const out = [];
+    for (let i = from; i <= to; i++) out.push(call(session, i));
+    return out;
+  };
+
+  // gen1 makes calls 1-6. gen2 copies them and adds 7-12. gen3 copies all of
+  // that and adds 13-18. Three transcripts, one conversation.
+  writeJsonl(path.join(root, 'gen1.jsonl'), run('s-gen1', 1, 6));
+  writeJsonl(path.join(root, 'gen2.jsonl'), run('s-gen2', 1, 12));
+  writeJsonl(path.join(root, 'gen3.jsonl'), run('s-gen3', 1, 18));
+
+  const out = await scan([root], { inferProjectFromPaths: false });
+  assert.equal(out.records.length, 18, 'the copies are still deduped away');
+  const heads = new Set(out.records.map((r) => r.conversation));
+  assert.deepEqual([...heads], ['s-gen3'], 'all of it belongs to the live session');
+
+  const pricing = {
+    cacheMultipliers: { write5m: 1.25, write1h: 2, read: 0.1 },
+    default: { input: 5, output: 25 },
+    models: {},
+  };
+  const agg = aggregate(out.records, 'all', pricing, {}, { compactThresholdTokens: 100000 }, {}, []);
+  const list = agg.compact.suggestions;
+  assert.equal(list.length, 1, 'one card, not three');
+  assert.equal(list[0].session, 's-gen3', 'named for the session you can still act in');
+  assert.equal(list[0].folded, 3);
+  assert.deepEqual(list[0].sessions.sort(), ['s-gen1', 's-gen2', 's-gen3']);
+  assert.equal(list[0].messages, 18, 'the whole conversation, counted once');
+});
+
+test('a mark on any session in a chain silences the whole conversation', async () => {
+  const root = tmpDir();
+  const base = Date.parse('2026-09-04T10:00:00.000Z');
+  const call = (session, i) => {
+    const rec = assistant({
+      sessionId: session,
+      requestId: 'req-' + i,
+      timestamp: new Date(base + i * 60000).toISOString(),
+    });
+    rec.message.id = 'msg-' + i;
+    rec.message.usage = {
+      input_tokens: 0,
+      output_tokens: 50,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 300000,
+    };
+    return rec;
+  };
+  const run = (session, to) => {
+    const out = [];
+    for (let i = 1; i <= to; i++) out.push(call(session, i));
+    return out;
+  };
+  writeJsonl(path.join(root, 'old.jsonl'), run('s-old', 4));
+  writeJsonl(path.join(root, 'new.jsonl'), run('s-new', 8));
+
+  const out = await scan([root], { inferProjectFromPaths: false });
+  const pricing = {
+    cacheMultipliers: { write5m: 1.25, write1h: 2, read: 0.1 },
+    default: { input: 5, output: 25 },
+    models: {},
+  };
+  const opts = { compactThresholdTokens: 100000 };
+  // Marked under the id that was on screen at the time - the older one.
+  const marks = { 's-old': base + 8 * 60000 };
+  const agg = aggregate(out.records, 'all', pricing, {}, opts, marks, []);
+  assert.equal(agg.compact.suggestions.length, 0, 'the mark reaches the whole chain');
+  assert.equal(agg.compact.marks.length, 1);
+  assert.equal(agg.compact.marks[0].folded, 2);
+});
+
 test('a copy with its usage zeroed never outranks the real record', async () => {
   // A fork can carry a message in as a stub. Being older does not make a stub
   // the record of an API call.

@@ -634,9 +634,11 @@ function renderCompact() {
   // alert this very refresh just sent rather than trailing it by one.
   maybeNotify(list);
   const raised = loadNotified();
+  const folded = list.reduce((t, s) => t + (s.folded || 1), 0);
   $('compactHint').textContent =
-    `${list.length} of ${c.sessionsChecked} sessions carry ≥ ${fmt(c.threshold)} tokens of context` +
-    (list.length ? ` · ${active} active, ${list.length - active} idle` : '');
+    `${list.length} of ${c.sessionsChecked} conversations carry ≥ ${fmt(c.threshold)} tokens of context` +
+    (list.length ? ` · ${active} active, ${list.length - active} idle` : '') +
+    (folded > list.length ? ` · ${folded} transcripts folded in` : '');
 
   if (!list.length) {
     host.innerHTML =
@@ -657,6 +659,16 @@ function renderCompact() {
             const comp = s.compactions
               ? `<span class="badge" title="last one ${ago(s.lastCompaction)}">compacted ${s.compactions}×</span>`
               : '';
+            // Resuming mints a new session id, so one conversation carried
+            // through three compactions used to be three cards - two of them
+            // for sessions you can no longer run anything in.
+            const chain =
+              s.folded > 1
+                ? `<span class="badge" title="${esc(
+                    'resumed through ' + s.folded + ' transcripts: ' +
+                      (s.sessions || []).map((x) => x.slice(0, 8)).join(', ')
+                  )}">+${s.folded - 1} resumed</span>`
+                : '';
             // Every alert this session has produced, collapsed onto the one
             // card instead of arriving as a fresh nag each time.
             const seen = raised[s.session];
@@ -683,7 +695,7 @@ function renderCompact() {
               : '';
             return (
               `<div class="cs${s.idle ? ' idle' : ''}" title="${esc(s.session)}">` +
-              `<div><div class="t">${esc(title)}${comp}${nag}${idle}</div>` +
+              `<div><div class="t">${esc(title)}${chain}${comp}${nag}${idle}</div>` +
               `<div class="sm">${full(s.messages)} turns · ${full(s.turnsAboveThreshold)} over the threshold · last ${ago(s.lastActivity)}</div>` +
               `${since}${tools}</div>` +
               `<div><div class="big">${fmt(s.contextNow)}</div><div class="sm">context per turn · peak ${fmt(s.contextPeak)}</div>` +
