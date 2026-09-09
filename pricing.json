@@ -1,5 +1,5 @@
 {
-  "_comment": "USD per 1M tokens. input/output are first-party Anthropic API rates. Cache multipliers are applied to the input rate: 5m write = 1.25x, 1h write = 2x, read = 0.1x. serverTools are billed per 1000 requests; web fetch has no per-request fee, its content is billed as input tokens. A dated snapshot id (claude-sonnet-4-5-20250929) is matched to its undated row. A model listed nowhere falls back to families, then to default, and is named in the dashboard banner either way. Edit freely; the server reloads this file on every fetch.",
+  "_comment": "USD per 1M tokens, first-party Anthropic API rates, checked against platform.claude.com/docs/en/about-claude/pricing on 2026-09-09. cacheMultipliers apply to a model's input rate: 5m write 1.25x, 1h write 2x, read 0.1x. A model row may override any of them - Fable 5.1 and Mythos 5.1 read at 0.025x. serverTools are billed per 1000 requests; web fetch has no per-request fee, its content is billed as input tokens. A dated snapshot id (claude-sonnet-4-5-20250929) is matched to its undated row; a model listed nowhere falls back to families, then default, and is named in the dashboard banner either way. Claude 4.6 and later include the full 1M context window at standard pricing, so there is no long-context premium to model. Edit freely; the server reloads this file on every fetch.",
   "cacheMultipliers": { "write5m": 1.25, "write1h": 2.0, "read": 0.1 },
   "serverTools": { "webSearchPer1k": 10.0, "webFetchPer1k": 0.0 },
   "default": { "input": 5.0, "output": 25.0 },
@@ -9,13 +9,15 @@
     "opus": { "input": 5.0, "output": 25.0 }
   },
   "models": {
-    "claude-fable-5-1": { "input": 10.0, "output": 50.0 },
+    "claude-fable-5-1": { "input": 10.0, "output": 50.0, "cacheMultipliers": { "read": 0.025 } },
+    "claude-mythos-5-1": { "input": 10.0, "output": 50.0, "cacheMultipliers": { "read": 0.025 } },
     "claude-fable-5": { "input": 10.0, "output": 50.0 },
-    "claude-mythos-5-1": { "input": 10.0, "output": 50.0 },
+    "claude-mythos-5": { "input": 10.0, "output": 50.0 },
     "claude-opus-5": { "input": 5.0, "output": 25.0, "fast": { "input": 10.0, "output": 50.0 } },
     "claude-opus-4-8": { "input": 5.0, "output": 25.0, "fast": { "input": 10.0, "output": 50.0 } },
     "claude-opus-4-7": { "input": 5.0, "output": 25.0 },
     "claude-opus-4-6": { "input": 5.0, "output": 25.0 },
+    "claude-opus-4-5": { "input": 5.0, "output": 25.0 },
     "claude-opus-4-1": { "input": 15.0, "output": 75.0 },
     "claude-opus-4": { "input": 15.0, "output": 75.0 },
     "claude-3-opus": { "input": 15.0, "output": 75.0 },

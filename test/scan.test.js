@@ -199,6 +199,38 @@ test('a copy with its usage zeroed never outranks the real record', async () => 
   assert.equal(out.records[0].out, 20, 'the real usage survived');
 });
 
+test('a model can override the cache multipliers it is billed at', () => {
+  // Fable 5.1 and Mythos 5.1 read cache at 0.025x their input rate, not the
+  // usual 0.1x. Cache reads are most of what an agentic session spends, so a
+  // flat multiplier overcharges them 4x.
+  const pricing = {
+    cacheMultipliers: { write5m: 1.25, write1h: 2, read: 0.1 },
+    default: { input: 5, output: 25 },
+    models: {
+      'claude-opus-5': { input: 5, output: 25 },
+      'claude-fable-5-1': { input: 10, output: 50, cacheMultipliers: { read: 0.025 } },
+    },
+  };
+  const rec = (model) => ({ model, speed: 'standard', in: 0, out: 0, cw5: 0, cw1: 0, cr: 1e6 });
+
+  assert.equal(costOf(rec('claude-opus-5'), pricing), 0.5, '1M cache reads at 5 x 0.1');
+  assert.equal(costOf(rec('claude-fable-5-1'), pricing), 0.25, '1M cache reads at 10 x 0.025');
+
+  // Only the named multiplier is overridden; the writes keep the global ones.
+  const write = { model: 'claude-fable-5-1', speed: 'standard', in: 0, out: 0, cw5: 1e6, cw1: 0, cr: 0 };
+  assert.equal(costOf(write, pricing), 12.5, 'the 5m write is still 1.25x');
+});
+
+test('an unlisted model inherits the global cache multipliers', () => {
+  const pricing = {
+    cacheMultipliers: { read: 0.2 },
+    default: { input: 5, output: 25 },
+    models: {},
+  };
+  const rec = { model: 'claude-unheard-of-9', speed: 'standard', in: 0, out: 0, cw5: 0, cw1: 0, cr: 1e6 };
+  assert.equal(costOf(rec, pricing), 1, 'global read multiplier, default rate');
+});
+
 test('an unlisted model is priced by date suffix, then by family, then default', () => {
   const pricing = {
     cacheMultipliers: { write5m: 1.25, write1h: 2, read: 0.1 },

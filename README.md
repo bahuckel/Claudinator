@@ -324,6 +324,22 @@ estimates and per-turn growth is offered as the measured number beside them.
 Costs are computed locally from `pricing.json` (USD per 1M tokens, first-party
 Anthropic API rates) with the standard cache multipliers: a 5-minute cache write
 costs 1.25× the input rate, a 1-hour cache write 2×, and a cache read 0.1×.
+
+**A model can override any of those three.** They are not uniform: Fable 5.1 and
+Mythos 5.1 read cache at **0.025×** their input rate, not 0.1×. Cache reads are
+what an agentic session spends almost everything on — 99% of the tokens on the
+corpus this was built against — so billing them flat overcharges those models
+4× on the line that matters most. Put the exception on the model row:
+
+```json
+"claude-fable-5-1": { "input": 10.0, "output": 50.0, "cacheMultipliers": { "read": 0.025 } }
+```
+
+Only the named multiplier is replaced; the others fall back to the global block.
+
+There is **no long-context premium to model**. Claude 4.6 and later include the
+full 1M token context window at standard pricing — a 900k-token request bills at
+the same per-token rate as a 9k one — so nothing here varies with context size.
 **Matching a model to a rate** goes in three steps, so a name the table has
 never seen still gets a sane number:
 
