@@ -199,20 +199,64 @@ test('a copy with its usage zeroed never outranks the real record', async () => 
   assert.equal(out.records[0].out, 20, 'the real usage survived');
 });
 
-test('a dated model id is priced as the model, not as the default', () => {
-  // The default rate is Opus-tier, so a Sonnet that fell through to it would
-  // be billed 67% over list.
+test('an unlisted model is priced by date suffix, then by family, then default', () => {
   const pricing = {
     cacheMultipliers: { write5m: 1.25, write1h: 2, read: 0.1 },
     default: { input: 5, output: 25 },
+    families: { haiku: { input: 1, output: 5 }, sonnet: { input: 3, output: 15 } },
     models: { 'claude-sonnet-4-5': { input: 3, output: 15 } },
   };
-  const rec = { model: 'claude-sonnet-4-5-20250929', speed: 'standard', in: 1e6, out: 0, cw5: 0, cw1: 0, cr: 0 };
-  assert.equal(costOf(rec, pricing), 3, 'the date suffix is dropped');
-  const plain = Object.assign({}, rec, { model: 'claude-sonnet-4-5' });
-  assert.equal(costOf(plain, pricing), 3);
-  const unknown = Object.assign({}, rec, { model: 'claude-unheard-of-9' });
-  assert.equal(costOf(unknown, pricing), 5, 'a genuinely unknown model still falls back');
+  // 1M input tokens, so the number printed is the input rate.
+  const at = (model) =>
+    costOf({ model, speed: 'standard', in: 1e6, out: 0, cw5: 0, cw1: 0, cr: 0 }, pricing);
+
+  assert.equal(at('claude-sonnet-4-5'), 3);
+  assert.equal(at('claude-sonnet-4-5-20250929'), 3, 'the date suffix is dropped');
+
+  // Not in the table at any spelling: the name still says which tier it is,
+  // and an Opus-tier default would price this Haiku 5x over.
+  assert.equal(at('claude-haiku-9-9-20990101'), 1, 'priced by family');
+  assert.equal(at('claude-sonnet-9-9'), 3);
+  assert.equal(at('gpt-something'), 5, 'no family in the name, so the default');
+});
+
+test('a model priced by family is still reported as unknown', () => {
+  // Guessing the tier makes the number sane; it does not make it right, so the
+  // banner must still name the model.
+  const now = Date.now();
+  const pricing = {
+    cacheMultipliers: { write5m: 1.25, write1h: 2, read: 0.1 },
+    default: { input: 5, output: 25 },
+    families: { haiku: { input: 1, output: 5 } },
+    models: { 'claude-opus-5': { input: 5, output: 25 } },
+  };
+  const rec = (model) => ({
+    session: 's1',
+    project: 'Alpha',
+    model,
+    speed: 'standard',
+    ts: now - 60000,
+    agentId: null,
+    sidechain: false,
+    in: 1e6,
+    out: 0,
+    think: 0,
+    cw5: 0,
+    cw1: 0,
+    cr: 0,
+  });
+  const out = aggregate(
+    [rec('claude-opus-5'), rec('claude-haiku-9-9')],
+    '30d',
+    pricing,
+    {},
+    {},
+    {},
+    []
+  );
+  const names = out.unknownModels.map((u) => u.name);
+  assert.deepEqual(names, ['claude-haiku-9-9'], 'the guessed one is flagged, the listed one is not');
+  assert.equal(out.unknownModels[0].cost, 1, 'and the banner shows what the guess cost');
 });
 
 test('project resolver rolls subfolders up to the git root or project folder', () => {

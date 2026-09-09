@@ -324,9 +324,22 @@ estimates and per-turn growth is offered as the measured number beside them.
 Costs are computed locally from `pricing.json` (USD per 1M tokens, first-party
 Anthropic API rates) with the standard cache multipliers: a 5-minute cache write
 costs 1.25× the input rate, a 1-hour cache write 2×, and a cache read 0.1×.
-A model named by a dated snapshot id (`claude-sonnet-4-5-20250929`) is priced as
-the model it is; only a genuinely unrecognised name falls back to `default`, and
-those are called out in the unknown-model banner.
+**Matching a model to a rate** goes in three steps, so a name the table has
+never seen still gets a sane number:
+
+1. the exact `models` entry;
+2. the same name with a dated snapshot suffix stripped, so
+   `claude-sonnet-4-5-20250929` prices as `claude-sonnet-4-5`;
+3. the `families` block — `haiku`, `sonnet`, `opus` — matched against the
+   name, and only then the flat `default`.
+
+Step 3 matters because `default` is a single number: whichever tier it names,
+every model in the other tiers is wrong by that much. An unlisted Haiku priced
+at an Opus-tier default comes out **6× over list**. Anything that misses step 1
+is still named in the dashboard's unknown-model banner with what it cost — a
+guessed rate is a guess, however close.
+
+The shipped table carries Claude 3 through 5. Rates change; edit the file.
 Fast-mode responses use the `fast` rates where a model defines them, and server
 tools are billed per 1,000 requests from the `serverTools` block (web search
 $10/1k; web fetch has no per-request fee — its content arrives as input tokens
