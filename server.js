@@ -85,7 +85,7 @@ function serveStatic(res, urlPath) {
 async function usageFor(range, filter) {
   const cfg = loadConfig(); // reloaded each fetch so edits apply live
   const pricing = loadPricing();
-  const { records, sessionMeta, toolCalls, stats } = await scan(cfg.roots, cfg);
+  const { records, sessionMeta, toolCalls, compactions, stats } = await scan(cfg.roots, cfg);
   const data = aggregate(
     records,
     range,
@@ -94,7 +94,8 @@ async function usageFor(range, filter) {
     cfg,
     loadMarks(cfg.markRetentionDays),
     toolCalls,
-    filter
+    filter,
+    compactions
   );
   data.scan = stats;
   return data;

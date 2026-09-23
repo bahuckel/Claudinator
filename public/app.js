@@ -684,8 +684,25 @@ function renderCompact() {
           'conversation started ' + new Date(s.startedAt).toLocaleString() + '\n' + s.session
         )}">${dayLabel(s.startedAt)} · ${esc(s.session.slice(0, 8))}</span>`
       : '';
+    // Counted from Claude Code's own compaction records when it wrote them,
+    // so the split between /compact and automatic is exact; older
+    // transcripts only allow a guess from the context dropping.
     const comp = s.compactions
-      ? `<span class="badge" title="last one ${ago(s.lastCompaction)}">compacted ${s.compactions}×</span>`
+      ? `<span class="badge" title="${esc(
+          'last one ' + ago(s.lastCompaction) + ' · ' +
+            (c.compactionsExact
+              ? `${s.compactionsManual} by /compact, ${s.compactionsAuto} automatic`
+              : 'detected from the context dropping')
+        )}">compacted ${s.compactions}×</span>`
+      : '';
+    // Claude Code only compacts by itself at the ceiling: every turn before it
+    // re-read nearly the whole window.
+    const autoBadge = s.autoCompactedAt
+      ? `<span class="badge auto" title="${esc(
+          `Claude Code compacted this itself at ${full(s.autoCompactedAt)} tokens of context - ` +
+            'it had reached the ceiling before anyone ran /compact. ' +
+            `Each turn that close to it re-read about ${money(s.autoTurnCost)} of context.`
+        )}">auto at ${fmt(s.autoCompactedAt)}</span>`
       : '';
     // Resuming mints a new session id, so one conversation carried through
     // three resumes used to be three cards - two of them for sessions you can
@@ -723,7 +740,10 @@ function renderCompact() {
       : '';
     return (
       `<div class="cs${s.idle ? ' idle' : ''}" title="${esc(s.session)}">` +
-      `<div><div class="t"><span class="ttl">${esc(title)}</span>${started}${chain}${comp}${nag}${idleBadge}</div>` +
+      `<div><div class="t"><span class="ttl">${esc(title)}</span>${started}</div>` +
+      (chain || comp || autoBadge || nag || idleBadge
+        ? `<div class="badges">${chain}${comp}${autoBadge}${nag}${idleBadge}</div>`
+        : '') +
       `<div class="sm">${full(s.messages)} turns · ${full(s.turnsAboveThreshold)} over the threshold · last ${ago(s.lastActivity)}</div>` +
       `${since}${tools}</div>` +
       `<div><div class="big">${fmt(s.contextNow)}</div><div class="sm">context per turn · peak ${fmt(s.contextPeak)}</div>` +

@@ -119,8 +119,13 @@ by project and listed with:
 
 - current context per turn, against a 1M window, plus the peak it has reached;
 - cost per turn right now, and **what share of that is pure re-reading**;
-- how many times the session has already been compacted — detected as a drop of
-  more than 50% in context between two consecutive turns;
+- how many times it has already been compacted, and how many of those were
+  automatic. Claude Code writes a `compact_boundary` record for every
+  compaction, saying whether you ran `/compact` or it had to step in itself; the
+  count comes from those. An **auto at 969.8k** badge means the conversation ran
+  into the context ceiling first, and hovering it says what each turn that
+  close to it was costing. Transcripts from a Claude Code old enough to write no
+  records fall back to spotting a drop of more than 50% between two turns;
 - what `/compact` would save per turn, and over the next 50 turns (assuming the
   context lands near `compactTargetTokens`, priced at the cache-read rate);
 - how much of that context is **tool output**, and which tool dominates it;
@@ -172,24 +177,27 @@ when it is:
 | Call a session idle after | 1 – 2,160 hours | 48 |
 | Keep "Compacted" marks for | 0 – 365 days | 7 |
 
-**The post-compact size is measured, not assumed.** A compaction leaves a
-mark in the transcript — context collapsing between one turn and the next —
-and the turn straight after that drop is metered like any other, so its size
-is simply *what a compacted session weighs*, on your machine, for your
-settings. Claudinator collects every such drop in range and uses the
-**median**, because one of them is usually a context edit that happened to
-clear half the window rather than a real compaction, and a mean would let
-that single outlier move the estimate by tens of thousands of tokens. Under
-three observations it falls back to the number you set by hand and says so.
+**The post-compact size is measured, not assumed.** The turn straight after a
+compaction is metered like any other, so its size is simply *what a compacted
+session weighs*, on your machine, for your settings. Claudinator takes the turn
+after each of Claude Code's compaction records in range and uses the
+**median**. (The record's own `postTokens` is the summary alone — about 13k —
+while the next turn also carries the system prompt and tools, which is what it
+bills.) Without records it falls back to spotting drops, where the median
+matters more: one drop is usually a context edit that happened to clear half the
+window, not a compaction, and a mean would let it move the estimate by tens of
+thousands of tokens. Under three observations it falls back to the number you
+set by hand and says so.
 
 The **Measure from** dropdown scopes that to one project, listing only
 projects that have actually been compacted, most evidence first, with the
 count beside each name. All projects is usually right: on the corpus this was
-built against, thirteen compactions across five projects gave per-project
-medians of 61k–73k against an overall 68.9k — the figure barely moves, and a
-single project rarely has enough events to beat the pooled one. The savings
-estimate is only as good as this number, and the old fixed default of 20,000
-was low by a factor of three and a half.
+built against, 47 recorded compactions put the median at 71.5k, range
+60.6k–89.8k — the figure barely moves between projects, and a single project
+rarely has enough events to beat the pooled one. (Spotting drops instead had
+found 13, one of them a 317k context edit.) The savings estimate is only as
+good as this number, and the old fixed default of 20,000 was low by a factor of
+three and a half.
 
 The threshold slider says how many sessions in the current range it would list
 *before* you save, so you can find the number you actually want instead of
@@ -266,25 +274,35 @@ or a backup root is deduped the same way, so adding backup folders is safe.
 skipped.
 
 **One conversation, not one transcript.** The same resume that duplicates
-records also mints a new `sessionId`, so a conversation carried through three
-compactions is three sessions as far as the transcript is concerned — and two
-of them no longer exist to run anything in. Sessions are folded back into one
-conversation before any suggestion is made: a session is superseded when
-another one holds **at least half its calls** and went on working after it, and
-following that to the end of the chain gives the session still live today.
+records also mints a new `sessionId`, so a conversation resumed every day for
+three weeks is dozens of transcripts on disk — and all but the last no longer
+exist to run anything in. They are folded back into one conversation before
+anything is counted or suggested. Two things survive a resume's copy exactly,
+so no threshold is needed:
 
-On the corpus this was built against that turned 76 session ids into 34
-conversations, and cut the `/compact` panel from 24 cards to 9 — the other 15
-were dead forks of conversations already listed. A folded card carries a
-**+2 resumed** badge naming the transcripts behind it.
+- **the first message.** Every copy made from the start shares its uuid.
+- **Claude Code's `compact_boundary` records.** `/compact` itself writes one
+  into the same transcript and does not start a new one; but a resume *after* a
+  compaction copies only from that point on, so it has a new first message — and
+  carries the boundary it was copied across.
+
+Transcripts that share either are one conversation, named for the one used
+most recently. (Two windows resumed from the same point and both still in use
+show as one card.) On the corpus this was built against that turned 100
+transcripts into 22 conversations and the `/compact` panel's live cards into 6 —
+a conversation worked on daily since the start of the month, 52 transcripts
+long, had been showing as twelve cards under the rule this replaced, which
+needed a successor to hold half its predecessor's calls and so missed every
+resume after a compaction. A folded card carries a **+51 resumed** badge naming
+the transcripts behind it.
 
 `session` itself is untouched: marks, filters and drill-down stay keyed on the
 real transcript id, and a mark on *any* session in a chain silences the whole
 conversation, since you marked the conversation compacted whichever of its ids
 happened to be on screen.
 
-**Which copy of a duplicate wins.** Resuming or compacting a session does not
-continue the old transcript: it starts a new one and copies the history in,
+**Which copy of a duplicate wins.** Resuming a session does not continue the
+old transcript: it starts a new one and copies the history in,
 rewriting each copied line's `cwd` and `sessionId` to the fork's. On the corpus
 this was built against, **half of all API calls exist in two to eight files**,
 carrying 47% of the tokens — so the copy that wins decides which project

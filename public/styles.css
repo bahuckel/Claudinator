@@ -637,12 +637,28 @@ kbd {
   min-width: 0;
 }
 
+/* Title and when-it-began on one line; the id drops under the title only when
+   the card is too narrow for both. */
 .cs .t {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 6px;
+  column-gap: 8px;
   font-weight: 600;
   white-space: nowrap;
+}
+
+/* Badges get a row of their own. Sharing the title's line, four of them left
+   a phone-width title zero pixels wide. */
+.cs .badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  margin: 3px 0 2px;
+}
+
+.cs .badges .badge {
+  margin-left: 0;
 }
 
 .cs .t .ttl {
@@ -653,10 +669,6 @@ kbd {
 
 .cs .t > :not(.ttl) {
   flex: none;
-}
-
-.cs .t .badge {
-  margin-left: 0;
 }
 
 /* When a conversation began and which transcript it is: the only thing that
@@ -727,7 +739,8 @@ kbd {
 
 /* A suggestion that has been raised more than once: the tally lives on the
    card so repeats do not have to arrive as separate alerts. */
-.badge.nag {
+.badge.nag,
+.badge.auto {
   border-color: var(--accent-dim);
   color: var(--accent);
 }
@@ -735,6 +748,12 @@ kbd {
 @media (max-width: 800px) {
   .cs {
     grid-template-columns: 1fr 1fr;
+  }
+
+  /* Title, date and badges get the card's full width; the numbers pair up
+     underneath. Half a phone-width card is too narrow for a title line. */
+  .cs > div:first-child {
+    grid-column: 1 / -1;
   }
 }
 

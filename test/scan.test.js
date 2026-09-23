@@ -183,6 +183,8 @@ test('a conversation resumed into new sessions is one suggestion, not three', as
     const rec = assistant(
       Object.assign(
         {
+          // A resume copies each line with its uuid intact.
+          uuid: 'u-' + i,
           sessionId: session,
           requestId: 'req-' + i,
           timestamp: new Date(base + i * 60000).toISOString(),
@@ -230,6 +232,139 @@ test('a conversation resumed into new sessions is one suggestion, not three', as
   assert.equal(list[0].messages, 18, 'the whole conversation, counted once');
 });
 
+// Transcripts shaped like Claude Code's own: a conversation compacted once by
+// hand and once automatically, resumed after the first compaction into a new
+// transcript (which copies only from the compaction on), plus a stale copy
+// made from the start, plus an unrelated conversation that happens to carry
+// the same title and whose context dropped once without any compaction.
+function lineageFixture() {
+  const root = tmpDir();
+  const base = Date.parse('2026-09-10T10:00:00.000Z');
+  const at = (min) => new Date(base + min * 60000).toISOString();
+  const title = (session) => ({ type: 'custom-title', customTitle: 'Same title', sessionId: session });
+  const call = (session, n, min, ctx) => {
+    const rec = assistant({ uuid: 'u-' + n, sessionId: session, requestId: 'req-' + n, timestamp: at(min) });
+    rec.message.id = 'msg-' + n;
+    rec.message.usage = { input_tokens: 0, output_tokens: 50, cache_creation_input_tokens: 0, cache_read_input_tokens: ctx };
+    return rec;
+  };
+  const boundary = (session, id, min, trigger, pre) => ({
+    type: 'system',
+    subtype: 'compact_boundary',
+    uuid: id,
+    parentUuid: null,
+    logicalParentUuid: 'u-before-' + id,
+    sessionId: session,
+    timestamp: at(min),
+    compactMetadata: { trigger, preTokens: pre, postTokens: 12000 },
+  });
+
+  // A: calls 1-4 climb to 400k, /compact by hand, then calls 5-6.
+  const a = [title('s-a'), call('s-a', 1, 1, 100000), call('s-a', 2, 2, 200000), call('s-a', 3, 3, 300000),
+    call('s-a', 4, 4, 400000), boundary('s-a', 'cb-1', 5, 'manual', 400000),
+    call('s-a', 5, 6, 60000), call('s-a', 6, 7, 150000)];
+  // B: resumed from A after the compaction - so it starts at the boundary, a
+  // different first message from A's - then climbs until Claude Code compacts
+  // it automatically, and carries on.
+  const b = [title('s-b'), boundary('s-b', 'cb-1', 5, 'manual', 400000),
+    call('s-b', 5, 6, 60000), call('s-b', 6, 7, 150000),
+    call('s-b', 7, 20, 500000), call('s-b', 8, 21, 968000),
+    boundary('s-b', 'cb-2', 22, 'auto', 968000),
+    call('s-b', 9, 23, 70000), call('s-b', 10, 24, 300000)];
+  // D: a stale copy of A made from the start, abandoned early.
+  const d = [title('s-d'), call('s-d', 1, 1, 100000), call('s-d', 2, 2, 200000), call('s-d', 3, 3, 300000)];
+  // C: unrelated, same title, one context edit that halved it - no boundary.
+  const cc = (n, min, ctx) => {
+    const r = call('s-c', 'c' + n, min, ctx);
+    return r;
+  };
+  const c = [title('s-c'), cc(1, 30, 200000), cc(2, 31, 80000), cc(3, 32, 250000)];
+
+  writeJsonl(path.join(root, 'a.jsonl'), a);
+  writeJsonl(path.join(root, 'b.jsonl'), b);
+  writeJsonl(path.join(root, 'c.jsonl'), c);
+  writeJsonl(path.join(root, 'd.jsonl'), d);
+  return root;
+}
+
+const LINEAGE_PRICING = {
+  cacheMultipliers: { write5m: 1.25, write1h: 2, read: 0.1 },
+  default: { input: 5, output: 25 },
+  models: {},
+};
+
+test('parseFile keeps each transcript\'s first message and its compaction records', async () => {
+  const root = lineageFixture();
+  const a = await parseFile(path.join(root, 'a.jsonl'));
+  assert.equal(a.sessions['s-a'].root, 'u-1', 'the title line has no uuid, so the first message is the root');
+  assert.deepEqual(
+    a.compactions.map((c) => [c.id, c.s, c.trigger, c.pre, c.post]),
+    [['cb-1', 's-a', 'manual', 400000, 12000]]
+  );
+  const b = await parseFile(path.join(root, 'b.jsonl'));
+  assert.equal(b.sessions['s-b'].root, 'cb-1', 'a resume after /compact starts at the boundary');
+  assert.deepEqual(b.compactions.map((c) => c.id), ['cb-1', 'cb-2']);
+});
+
+test('a resume after /compact is the same conversation; a same-titled one is not', async () => {
+  // The call-overlap rule this replaced needed a successor to hold half its
+  // predecessor's calls. B holds 2 of A's 6, so it was left as a separate card.
+  const out = await scan([lineageFixture()], { inferProjectFromPaths: false });
+  const convOf = (sid) => (out.records.find((r) => r.session === sid) || {}).conversation;
+  assert.equal(convOf('s-a'), 's-b', 'A was resumed into B: named for B, the one still in use');
+  assert.equal(convOf('s-b'), 's-b');
+  assert.equal(convOf('s-c'), 's-c', 'same title, different conversation');
+  const chain = out.records.find((r) => r.session === 's-b').conversationSessions;
+  assert.deepEqual(chain, ['s-a', 's-b', 's-d'], 'the stale copy from the start folds in too');
+
+  // Two compactions, however many transcripts copied their records.
+  assert.deepEqual(out.compactions.map((c) => [c.id, c.trigger, c.conversation]), [
+    ['cb-1', 'manual', 's-b'],
+    ['cb-2', 'auto', 's-b'],
+  ]);
+});
+
+test('compactions are counted from Claude Code\'s records, not guessed from drops', async () => {
+  const out = await scan([lineageFixture()], { inferProjectFromPaths: false });
+  const agg = aggregate(out.records, 'all', LINEAGE_PRICING, {}, { compactThresholdTokens: 100000 }, {}, [], null, out.compactions);
+  const cards = Object.fromEntries(agg.compact.suggestions.map((x) => [x.session, x]));
+  assert.equal(agg.compact.compactionsExact, true);
+
+  const b = cards['s-b'];
+  assert.equal(b.compactions, 2);
+  assert.equal(b.compactionsManual, 1);
+  assert.equal(b.compactionsAuto, 1);
+  assert.equal(b.autoCompactedAt, 968000, 'where Claude Code had to step in');
+  assert.ok(Math.abs(b.autoTurnCost - 0.484) < 1e-9, 'one turn re-reading 968k from cache at $0.50/MTok');
+
+  // C's context halved once, which the drop rule would call a compaction. No
+  // record says one happened, and records exist, so it did not.
+  assert.equal(cards['s-c'].compactions, 0);
+
+  // The post-compact size comes from the turn after each recorded compaction:
+  // 60k after the manual one, 70k after the automatic one - and C's drop, not
+  // being a compaction, is not measured.
+  assert.equal(agg.compact.measured.all.n, 2);
+  assert.equal(agg.compact.measured.all.low, 60000);
+  assert.equal(agg.compact.measured.all.high, 70000);
+
+  // A mark hides compactions from before it, as it hides turns.
+  const marked = aggregate(out.records, 'all', LINEAGE_PRICING, {}, { compactThresholdTokens: 100000 },
+    { 's-a': Date.parse('2026-09-10T10:10:00.000Z') }, [], null, out.compactions);
+  const after = marked.compact.suggestions.find((x) => x.session === 's-b');
+  assert.equal(after.compactions, 1, 'only the automatic one is after the mark');
+});
+
+test('without compaction records, counting falls back to context drops', async () => {
+  const out = await scan([lineageFixture()], { inferProjectFromPaths: false });
+  // An older Claude Code wrote no records: none are passed.
+  const agg = aggregate(out.records, 'all', LINEAGE_PRICING, {}, { compactThresholdTokens: 100000 }, {}, [], null, []);
+  assert.equal(agg.compact.compactionsExact, false);
+  const c = agg.compact.suggestions.find((x) => x.session === 's-c');
+  assert.equal(c.compactions, 1, 'the drop is all there is to go on');
+  assert.equal(c.compactionsAuto, null);
+});
+
 test('usage is counted and listed by conversation, not by transcript', async () => {
   // One conversation resumed twice is three transcripts on disk. The KPI, the
   // top list and the filter all have to treat it as the one thing it is - and
@@ -240,6 +375,7 @@ test('usage is counted and listed by conversation, not by transcript', async () 
   const at = (i) => (i === 1 ? now - 20 * day : now - 2 * day + i * 60000);
   const call = (session, i) => {
     const rec = assistant({
+      uuid: 'u-' + i, // copied with its uuid, as a resume does
       sessionId: session,
       requestId: 'req-' + i,
       timestamp: new Date(at(i)).toISOString(),
@@ -301,6 +437,7 @@ test('a mark on any session in a chain silences the whole conversation', async (
   const base = Date.parse('2026-09-04T10:00:00.000Z');
   const call = (session, i) => {
     const rec = assistant({
+      uuid: 'u-' + i, // copied with its uuid, as a resume does
       sessionId: session,
       requestId: 'req-' + i,
       timestamp: new Date(base + i * 60000).toISOString(),
