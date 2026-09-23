@@ -100,16 +100,42 @@ async function usageFor(range, filter) {
   return data;
 }
 
-// Only this machine's own page may write; a stray cross-origin POST cannot.
-function sameOrigin(req) {
-  const origin = req.headers.origin;
-  if (!origin) return true; // curl and friends
+// The names this server is reached by. Binding to 127.0.0.1 keeps other
+// machines out, but not other web pages: a site can point its own domain at
+// 127.0.0.1 ("DNS rebinding") and the browser will send it here as a
+// same-origin request. What it cannot fake is the Host header, which still
+// carries its own name - so anything not addressed to this machine is refused.
+const LOCAL_NAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+function localAddress(value, port) {
+  if (typeof value !== 'string' || !value) return false;
+  let u;
   try {
-    const u = new URL(origin);
-    return u.hostname === '127.0.0.1' || u.hostname === 'localhost';
+    u = new URL('http://' + value);
   } catch {
     return false;
   }
+  if (u.username || u.password || u.pathname !== '/') return false;
+  return LOCAL_NAMES.has(u.hostname.toLowerCase()) && Number(u.port || 80) === port;
+}
+
+function boundPort() {
+  const a = server.address();
+  return a && typeof a === 'object' ? a.port : bootCfg.port;
+}
+
+// Only this machine's own page may write: another local app on another port
+// counts as another origin, the same as a remote one.
+function sameOrigin(req) {
+  const origin = req.headers.origin;
+  if (!origin) return true; // curl and friends
+  let u;
+  try {
+    u = new URL(origin);
+  } catch {
+    return false;
+  }
+  return u.protocol === 'http:' && localAddress(u.host, boundPort());
 }
 
 function readJsonBody(req, cb) {
@@ -153,6 +179,12 @@ function acceptPost(req, res, cb) {
 }
 
 const server = http.createServer((req, res) => {
+  // Before anything else, reads included: the usage data names every project
+  // and quotes the first prompt of every session.
+  if (!localAddress(req.headers.host, boundPort())) {
+    sendJson(res, 421, { error: 'this server only answers to localhost' });
+    return;
+  }
   const url = new URL(req.url, 'http://localhost');
   const range = url.searchParams.get('range') || '30d';
 

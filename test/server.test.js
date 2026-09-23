@@ -2,6 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const http = require('http');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const os = require('os');
@@ -49,6 +50,61 @@ test('serves the dashboard and its assets', async () => {
   const js = await fetch(BASE + '/app.js');
   assert.equal(js.status, 200);
   assert.match(js.headers.get('content-type'), /javascript/);
+});
+
+// fetch() will not let a caller set Host, which is the whole point of the
+// check, so these go through http.request.
+function withHost(host, pathname, extra) {
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        host: '127.0.0.1',
+        port: PORT,
+        path: pathname,
+        method: (extra && extra.method) || 'GET',
+        headers: Object.assign({ Host: host }, (extra && extra.headers) || {}),
+      },
+      (res) => {
+        let body = '';
+        res.on('data', (c) => (body += c));
+        res.on('end', () => resolve({ status: res.statusCode, body }));
+      }
+    );
+    req.on('error', reject);
+    if (extra && extra.body) req.write(extra.body);
+    req.end();
+  });
+}
+
+test('answers only to its own name, so a rebinding page cannot read it', async () => {
+  // A page on a domain re-pointed at 127.0.0.1 arrives with its own name in Host.
+  for (const host of ['evil.example:' + PORT, 'evil.example', 'localhost:1', '127.0.0.2:' + PORT, 'localhost.evil.example:' + PORT]) {
+    for (const p of ['/api/usage?range=7d', '/api/usage.csv?range=7d', '/api/settings', '/api/health', '/']) {
+      const res = await withHost(host, p);
+      assert.equal(res.status, 421, host + ' ' + p + ' -> ' + res.status);
+      assert.ok(!/sessions|Claudinator on|<html/i.test(res.body), host + ' ' + p + ' leaked a body');
+    }
+  }
+  const post = await withHost('evil.example:' + PORT, '/api/compact-mark', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session: 'x', ts: 1 }),
+  });
+  assert.equal(post.status, 421, 'writes too');
+
+  // Every name the page is actually opened under still works.
+  for (const host of ['localhost:' + PORT, '127.0.0.1:' + PORT, '[::1]:' + PORT, 'LOCALHOST:' + PORT]) {
+    assert.equal((await withHost(host, '/api/health')).status, 200, host);
+  }
+});
+
+test('a page on another local port counts as another origin', async () => {
+  const res = await fetch(BASE + '/api/compact-mark', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: 'http://localhost:3000' },
+    body: JSON.stringify({ session: 'x', ts: 1 }),
+  });
+  assert.equal(res.status, 403);
 });
 
 test('refuses to serve files outside public/', async () => {

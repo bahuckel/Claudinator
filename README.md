@@ -12,6 +12,9 @@ fortune in re-read context.
 
 **Everything is local.** No API key, no network calls, no telemetry. The server
 binds to `127.0.0.1` and only ever reads files that are already on your disk.
+It also refuses any request not addressed to `localhost` or `127.0.0.1` on its
+own port, so a web page that points its own domain at your machine (DNS
+rebinding) cannot read your session titles through your browser.
 
 ## Your data stays yours
 
