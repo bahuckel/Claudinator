@@ -156,6 +156,17 @@ function pct(n) {
   return (n * 100).toFixed(1) + '%';
 }
 
+/** "Opus 5.5" for claude-opus-5-5; the server names every model it sends. */
+function modelName(id) {
+  const names = state.data && state.data.modelLabels;
+  return (names && names[id]) || id;
+}
+
+/** "1M" / "200k": a context window at a glance. */
+function windowLabel(n) {
+  return n >= 1e6 ? +(n / 1e6).toFixed(1) + 'M' : Math.round(n / 1e3) + 'k';
+}
+
 /** "Sep 12" from a timestamp. */
 function dayLabel(ts) {
   const d = new Date(ts);
@@ -425,8 +436,8 @@ function bucketTipRows(b) {
     ['Output', full(b.output) + (b.thinking ? ` (${full(b.thinking)} thinking)` : '')],
     ['Cache write', full(b.cacheWrite)],
     ['Cache read', full(b.cacheRead)],
-    ['Messages', full(b.messages)],
-    ['Sessions', full(b.sessions)],
+    ['Requests', full(b.messages)],
+    ['Conversations', full(b.sessions)],
     ['Est. cost', money(b.cost)],
   ];
 }
@@ -463,7 +474,8 @@ function renderDaily() {
   } else {
     const dim = STACK_DIMS[stack];
     const { keys, colors, hasOther } = stackKeys(buckets, dim, metric);
-    legend = keys.map((k) => ({ label: k, color: colors[k] }));
+    const name = stack === 'model' ? modelName : (k) => k;
+    legend = keys.map((k) => ({ label: name(k), color: colors[k] }));
     if (hasOther) legend.push({ label: 'other', color: OTHER_COLOR });
     rows = buckets.map((b) => {
       const parts = [];
@@ -476,7 +488,7 @@ function renderDaily() {
         total += val;
         if (colors[k]) {
           parts.push({ color: colors[k], value: val, key: k });
-          tipRows.push([k, valueFmt(val), colors[k]]);
+          tipRows.push([name(k), valueFmt(val), colors[k]]);
         } else other += val;
       }
       parts.sort((x, y) => keys.indexOf(x.key) - keys.indexOf(y.key));
@@ -673,8 +685,11 @@ function renderCompact() {
     (idle.length ? ` · ${idle.length} idle, folded below` : '') +
     (folded > list.length ? ` · ${folded} transcripts folded in` : '');
 
-  const ctxMax = 1e6; // 1M context window on current models
   const card = (s) => {
+    // Against this model's own window: Haiku 4.5 and everything before the
+    // 4.6 generation have 200K, so a fixed 1M read them at a fifth of reality.
+    const win = s.contextWindow || 1e6;
+    const winTip = `${full(s.contextNow)} of ${modelName(s.model)}'s ${windowLabel(win)} context window`;
     const title = s.title || s.session.slice(0, 8);
     // Claude Code titles conversations by what they are about, so a project
     // worked on daily produces a run of identically named cards. When it
@@ -746,8 +761,9 @@ function renderCompact() {
         : '') +
       `<div class="sm">${full(s.messages)} turns · ${full(s.turnsAboveThreshold)} over the threshold · last ${ago(s.lastActivity)}</div>` +
       `${since}${tools}</div>` +
-      `<div><div class="big">${fmt(s.contextNow)}</div><div class="sm">context per turn · peak ${fmt(s.contextPeak)}</div>` +
-      `<div class="meter"><i style="width:${Math.min(100, (s.contextNow / ctxMax) * 100).toFixed(1)}%"></i></div></div>` +
+      `<div><div class="big">${fmt(s.contextNow)}</div>` +
+      `<div class="sm">context per turn · peak ${fmt(s.contextPeak)} · ${esc(modelName(s.model))}, ${windowLabel(win)}</div>` +
+      `<div class="meter" title="${esc(winTip)}"><i style="width:${Math.min(100, (s.contextNow / win) * 100).toFixed(1)}%"></i></div></div>` +
       `<div class="save"><div>${money(s.costPerMsgNow)} / turn now<span class="sm">${esc(growth)}</span>${early}</div>` +
       `<div class="sm">compact saves ≈ <b>${money(s.savePerMsg)}</b> / turn · <b>${money(s.saveNext50)}</b> over 50 turns</div></div>` +
       `<div class="act"><div class="cmd">/compact</div>` +
@@ -1507,6 +1523,7 @@ function renderSessions() {
 
 /** A filter value as a person would recognise it. */
 function filterLabel(key, value) {
+  if (key === 'model') return modelName(value);
   if (key === 'conversation' || key === 'session') {
     const row = (state.data.sessions || []).find((x) => x.name === value);
     if (row && row.title) return row.title + ' · ' + String(value).slice(0, 8);
@@ -1571,7 +1588,11 @@ function renderAll() {
     (d.agentRuns || []).map((r) => Object.assign({}, r, { path: r.agent + ' · ' + r.project })),
     { nameHead: 'Task', subKey: 'path', empty: 'No subagents were launched in this range.' }
   );
-  breakdownTable($('models'), d.models, { nameHead: 'Model', filterKey: 'model' });
+  breakdownTable(
+    $('models'),
+    d.models.map((m) => Object.assign({}, m, { label: modelName(m.name), title: m.name })),
+    { nameHead: 'Model', filterKey: 'model' }
+  );
   breakdownTable($('efforts'), d.efforts, {
     nameHead: 'Effort',
     filterKey: 'effort',

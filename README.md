@@ -117,7 +117,11 @@ by project and listed with:
   project worked on every day produces a run of cards with the same name; the
   date and id are what tell them apart;
 
-- current context per turn, against a 1M window, plus the peak it has reached;
+- current context per turn, against **that model's** context window, plus the
+  peak it has reached. Models from the 4.6 generation on have 1M; Haiku 4.5 and
+  everything earlier have 200K (the `context` field in `pricing.json`). A peak
+  past the documented window means the conversation ran on a larger one — Sonnet
+  4 and 4.5 had a 1M beta — and the meter uses that instead;
 - cost per turn right now, and **what share of that is pure re-reading**;
 - how many times it has already been compacted, and how many of those were
   automatic. Claude Code writes a `compact_boundary` record for every
@@ -243,7 +247,9 @@ exact numbers.
   appended between one turn and the next, and the largest jumps with the tools
   that ran in them.
 - **Agent runs** — every individual subagent launch, by its task description.
-- **Per model** — tokens and cost split by model id.
+- **Per model** — tokens and cost split by model, shown by name ("Opus 5.5",
+  "Sonnet 3.5") rather than id; hover a name for the exact id. The chart's
+  *By model* stacking and the filter chip use the same names.
 - **Per effort** — the same split by effort level.
 - **Top conversations** — the 25 largest, titled from the custom title or the
   first prompt, with when each began and its current context size. A
@@ -324,6 +330,11 @@ each cwd is rolled up:
    folder that contains several distinct project subfolders in use, such as
    `~/Desktop/Projects`;
 3. otherwise to the cwd itself.
+
+Claude's desktop app gives every throwaway chat a folder of its own under
+`<app data>/Claude/scratch-workspaces/`, named after a date. Those are gathered
+into one **Claude scratch** project rather than listed one per chat; pin one
+under `projectRoots` if you want it kept apart.
 
 A session started directly inside a workspace folder has no project of its own,
 so its **file paths are used instead**: every absolute path in its tool calls

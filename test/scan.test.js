@@ -20,6 +20,7 @@ const {
   aggregate,
   scan,
   toCsv,
+  modelLabel,
 } = require('../lib/scan');
 
 // Fixture roots live inside the suite's state dir, so the one cleanup at the
@@ -540,6 +541,60 @@ test('an unlisted model inherits the global cache multipliers', () => {
   assert.equal(costOf(rec, pricing), 1, 'global read multiplier, default rate');
 });
 
+test('model ids read as model names, in both naming schemes', () => {
+  const cases = {
+    'claude-opus-5-5': 'Opus 5.5',
+    'claude-opus-5': 'Opus 5',
+    'claude-fable-5-1': 'Fable 5.1',
+    'claude-mythos-5': 'Mythos 5',
+    'claude-sonnet-4-5-20250929': 'Sonnet 4.5',
+    'claude-opus-4-20250514': 'Opus 4', // the date is not a minor version
+    'claude-opus-4-0': 'Opus 4',
+    'claude-haiku-4-5-20251001': 'Haiku 4.5',
+    'claude-3-5-sonnet-20241022': 'Sonnet 3.5', // family last, before Claude 4
+    'claude-3-opus-20240229': 'Opus 3',
+    'claude-mythos-preview': 'claude-mythos-preview', // not a versioned id: left alone
+    '<synthetic>': '<synthetic>',
+  };
+  for (const [id, want] of Object.entries(cases)) assert.equal(modelLabel(id), want, id);
+});
+
+test('each /compact card knows its model\'s context window', () => {
+  const now = Date.now();
+  const pricing = {
+    cacheMultipliers: { write5m: 1.25, write1h: 2, read: 0.1 },
+    contextWindow: 1000000,
+    default: { input: 5, output: 25 },
+    families: { haiku: { input: 1, output: 5, context: 200000 } },
+    models: {
+      'claude-opus-5': { input: 5, output: 25 },
+      'claude-haiku-4-5': { input: 1, output: 5, context: 200000 },
+      'claude-sonnet-4-5': { input: 3, output: 15, context: 200000 },
+    },
+  };
+  const turn = (session, model, cr, i) => ({
+    session, conversation: session, project: 'p', model, speed: 'standard', effort: 'high',
+    ts: now - (100 - i) * 60000, agentId: null, sidechain: false,
+    in: 0, out: 50, think: 0, cw5: 0, cw1: 0, cr, webSearch: 0, webFetch: 0,
+  });
+  const records = [
+    turn('opus', 'claude-opus-5', 150000, 1),
+    turn('haiku', 'claude-haiku-4-5-20251001', 150000, 2),
+    turn('guess', 'claude-haiku-9-9', 150000, 3),
+    // A peak past the documented 200K: this ran on Sonnet 4.5's 1M beta.
+    turn('beta', 'claude-sonnet-4-5', 400000, 4),
+    turn('beta', 'claude-sonnet-4-5', 150000, 5),
+  ];
+  const out = aggregate(records, '7d', pricing, {}, { compactThresholdTokens: 100000 }, {}, []);
+  const win = Object.fromEntries(out.compact.suggestions.map((c) => [c.session, c.contextWindow]));
+  assert.equal(win.opus, 1000000);
+  assert.equal(win.haiku, 200000, 'matched through the dated id');
+  assert.equal(win.guess, 200000, 'an unlisted Haiku takes its family\'s window');
+  assert.equal(win.beta, 1000000, 'a peak past the window means it ran on a larger one');
+  assert.equal(out.modelLabels['claude-haiku-4-5-20251001'], 'Haiku 4.5');
+  assert.equal(out.modelLabels['claude-opus-5'], 'Opus 5');
+});
+
 test('an unlisted model is priced by date suffix, then by family, then default', () => {
   const pricing = {
     cacheMultipliers: { write5m: 1.25, write1h: 2, read: 0.1 },
@@ -625,6 +680,30 @@ test('project resolver rolls subfolders up to the git root or project folder', (
   assert.equal(resolve(c).label, 'C');
   assert.equal(resolve(ws).workspace, true);
   assert.equal(resolve(ws).label, path.basename(ws) + ' (root)');
+});
+
+test('Claude desktop scratch folders are one project, not one per chat', () => {
+  const B = String.fromCharCode(92);
+  const win = ['C:', 'Users', 'me', 'AppData', 'Roaming', 'Claude', 'scratch-workspaces', 'acct', 'org'].join(B);
+  const mac = '/Users/me/Library/Application Support/Claude/scratch-workspaces/acct/org';
+  const cwds = [
+    win + B + 'scratch-2026-09-04-5742c0',
+    win + B + 'scratch-2026-09-06-c75ecb',
+    mac + '/scratch-2026-09-09-d3ce78',
+    '/home/me/code/scratch-notes', // "scratch" in a name is not Claude's folder
+  ];
+  const resolve = buildProjectResolver(cwds, {});
+  const a = resolve(cwds[0]);
+  assert.equal(a.label, 'Claude scratch');
+  assert.equal(a.path, ['C:', 'Users', 'me', 'AppData', 'Roaming', 'Claude', 'scratch-workspaces'].join(B));
+  assert.equal(resolve(cwds[1]).label, 'Claude scratch', 'a second chat lands in the same place');
+  assert.equal(resolve(cwds[2]).label, 'Claude scratch', 'macOS paths too');
+  assert.equal(resolve(cwds[2]).path, '/Users/me/Library/Application Support/Claude/scratch-workspaces');
+  assert.notEqual(resolve(cwds[3]).label, 'Claude scratch');
+
+  // Pinning one as a project still wins.
+  const pinned = buildProjectResolver(cwds, { projectRoots: [cwds[0]] });
+  assert.equal(pinned(cwds[0]).label, 'scratch-2026-09-04-5742c0');
 });
 
 test('project resolver honours explicit projectRoots', () => {
