@@ -802,6 +802,71 @@ test('context growth is measured exactly and skips compactions', () => {
   assert.deepEqual(g.biggest[0].tools, []);
 });
 
+test('tool calls land in the gap they happened in, even past a skipped one', () => {
+  // The tool calls are walked with one cursor per session. A gap that shrank is
+  // skipped, but its tool calls must still be stepped over - otherwise they
+  // leak into the next gap that is counted.
+  const now = Date.now();
+  const mk = (key, ts, ctx, session) => ({
+    key, ts, model: 'claude-opus-5', speed: 'standard', effort: 'high',
+    session: session || 's', sidechain: false, agentId: null, agent: 'main thread',
+    cwd: 'C:\\w\\p', project: 'p', projectPath: 'C:\\w\\p',
+    in: 0, out: 0, think: 0, cw5: 0, cw1: 0, cr: ctx, webSearch: 0, webFetch: 0,
+  });
+  const tool = (t, n, over) => Object.assign({ s: 's', t, n, c: 1000, i: 0, a: null }, over);
+  const records = [
+    mk('a', now - 5000, 10000),
+    mk('b', now - 4000, 20000), // grew: Read
+    mk('c', now - 3000, 5000), // shrank: Grep is in here and must not surface
+    mk('d', now - 2000, 9000), // grew: Edit, plus Bash exactly on the boundary
+    mk('x', now - 2500, 50000, 'other'),
+  ];
+  const toolCalls = [
+    tool(now - 4500, 'Read'),
+    tool(now - 3500, 'Grep'),
+    tool(now - 2500, 'Edit'),
+    tool(now - 2000, 'Bash'), // t == turn d: belongs to the gap it closes
+    tool(now - 2400, 'Glob', { s: 'other' }), // another session's
+    tool(now - 2400, 'Task', { a: 'agent-1' }), // a subagent's, not main thread
+  ];
+  const g = aggregate(records, '7d', PRICING, {}, {}, {}, toolCalls).contextGrowth;
+  const byGrew = Object.fromEntries(g.biggest.map((e) => [e.grew, e.tools]));
+  assert.deepEqual(byGrew[10000], ['Read']);
+  assert.deepEqual(byGrew[4000], ['Edit', 'Bash']);
+  assert.equal(g.shrinks, 1);
+});
+
+test('a month of heavy use aggregates in well under a second', () => {
+  // The shape that took five seconds per fetch: tens of thousands of turns
+  // across many sessions, with a tool call between most of them. The old
+  // code compared every turn against every tool call in the corpus.
+  const now = Date.now();
+  const records = [];
+  const toolCalls = [];
+  const SESSIONS = 80;
+  const TURNS = 250;
+  for (let s = 0; s < SESSIONS; s++) {
+    for (let i = 0; i < TURNS; i++) {
+      const ts = now - 20 * 86400000 + (s * TURNS + i) * 1000;
+      records.push({
+        key: s + ':' + i, ts, model: 'claude-opus-5', speed: 'standard', effort: 'high',
+        session: 's' + s, sidechain: false, agentId: null, agent: 'main thread',
+        cwd: 'C:\\w\\p', project: 'p', projectPath: 'C:\\w\\p',
+        in: 2, out: 300, think: 0, cw5: 0, cw1: 500, cr: 20000 + i * 1500,
+        webSearch: 0, webFetch: 0,
+      });
+      toolCalls.push({ s: 's' + s, t: ts - 400, n: 'Read', c: 4000, i: 0, a: null });
+      toolCalls.push({ s: 's' + s, t: ts - 200, n: 'Bash', c: 2000, i: 0, a: null });
+    }
+  }
+  const t0 = Date.now();
+  const out = aggregate(records, '30d', PRICING, {}, { compactThresholdTokens: 150000 }, {}, toolCalls);
+  const ms = Date.now() - t0;
+  assert.equal(out.totals.messages, SESSIONS * TURNS);
+  assert.ok(out.contextGrowth.turns > 0);
+  assert.ok(ms < 1500, `aggregate took ${ms} ms for ${records.length} turns and ${toolCalls.length} tool calls`);
+});
+
 test('the post-compact size is measured from the compactions in the transcripts', async () => {
   const { aggregate } = require('../lib/scan');
   const now = Date.now();
