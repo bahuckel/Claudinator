@@ -6,6 +6,12 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+// Nothing in this suite may touch the real install's cache, marks or settings.
+// Set before lib/scan is loaded, although it reads the variable on every use.
+const STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'claudinator-state-'));
+process.env.CLAUDINATOR_STATE_DIR = STATE_DIR;
+test.after(() => fs.rmSync(STATE_DIR, { recursive: true, force: true }));
+
 const {
   parseFile,
   buildProjectResolver,
@@ -16,8 +22,10 @@ const {
   toCsv,
 } = require('../lib/scan');
 
+// Fixture roots live inside the suite's state dir, so the one cleanup at the
+// end removes them; left in the system temp folder they piled up 18 per run.
 function tmpDir() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'claudinator-'));
+  return fs.mkdtempSync(path.join(STATE_DIR, 'root-'));
 }
 
 function writeJsonl(file, lines) {
@@ -551,14 +559,50 @@ test('compact suggestions flag big contexts and detect earlier compactions', () 
   assert.equal(retired.compact.marks[0].turnsSince, 0);
 });
 
-test('marks round-trip through the marks file', (t) => {
-  const { loadMarks, setMark } = require('../lib/scan');
-  const file = path.join(__dirname, '..', 'compact-marks.json');
-  const had = fs.existsSync(file) ? fs.readFileSync(file) : null;
+test('the cache, marks and settings all follow CLAUDINATOR_STATE_DIR', async (t) => {
+  const { scan, setMark, saveConfig } = require('../lib/scan');
+  const repo = path.join(__dirname, '..');
+  const before = (f) => {
+    try {
+      return fs.readFileSync(path.join(repo, f));
+    } catch {
+      return null;
+    }
+  };
+  const snapshot = ['.cache/records.json', 'compact-marks.json', 'config.json'].map((f) => [f, before(f)]);
+
+  const other = fs.mkdtempSync(path.join(os.tmpdir(), 'claudinator-other-'));
+  // (outside STATE_DIR on purpose: it has to be a different state dir)
+  const root = tmpDir();
   t.after(() => {
-    if (had) fs.writeFileSync(file, had);
-    else fs.rmSync(file, { force: true });
+    process.env.CLAUDINATOR_STATE_DIR = STATE_DIR;
+    fs.rmSync(other, { recursive: true, force: true });
   });
+  writeJsonl(path.join(root, 'a.jsonl'), [assistant()]);
+
+  process.env.CLAUDINATOR_STATE_DIR = other;
+  await scan([root], {});
+  setMark('sess-x', 1);
+  saveConfig({ compactIdleHours: 12 });
+
+  assert.ok(fs.existsSync(path.join(other, '.cache', 'records.json')), 'cache written to the state dir');
+  assert.ok(fs.existsSync(path.join(other, 'compact-marks.json')), 'marks too');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(other, 'config.json'), 'utf8')).compactIdleHours, 12);
+
+  // Switching dirs mid-process must not carry one cache into the other's file.
+  process.env.CLAUDINATOR_STATE_DIR = STATE_DIR;
+  await scan([tmpDir()], {});
+  const moved = JSON.parse(fs.readFileSync(path.join(STATE_DIR, '.cache', 'records.json'), 'utf8'));
+  assert.equal(Object.keys(moved.files).length, 0, 'a fresh dir starts from its own cache');
+
+  for (const [f, was] of snapshot) {
+    assert.deepEqual(before(f), was, f + ' in the repository was not touched');
+  }
+});
+
+test('marks round-trip through the marks file', () => {
+  const { loadMarks, setMark } = require('../lib/scan');
+  const file = path.join(STATE_DIR, 'compact-marks.json');
 
   fs.rmSync(file, { force: true });
   assert.deepEqual(loadMarks(), {});
@@ -572,14 +616,9 @@ test('marks round-trip through the marks file', (t) => {
   assert.deepEqual(loadMarks(), {});
 });
 
-test('marks older than the retention window are pruned from the file', (t) => {
+test('marks older than the retention window are pruned from the file', () => {
   const { loadMarks, setMark } = require('../lib/scan');
-  const file = path.join(__dirname, '..', 'compact-marks.json');
-  const had = fs.existsSync(file) ? fs.readFileSync(file) : null;
-  t.after(() => {
-    if (had) fs.writeFileSync(file, had);
-    else fs.rmSync(file, { force: true });
-  });
+  const file = path.join(STATE_DIR, 'compact-marks.json');
 
   const now = Date.now();
   const day = 86400000;
@@ -1049,7 +1088,7 @@ test('a session run from a workspace folder is attributed by the files it touche
   const gamma = path.join(ws, 'Gamma');
   for (const d of [alpha, beta, gamma]) fs.mkdirSync(path.join(d, 'src'), { recursive: true });
 
-  const roots = fs.mkdtempSync(path.join(os.tmpdir(), 'claudinator-scan-'));
+  const roots = tmpDir();
   const mk = (session, cwd, content) =>
     assistant({
       uuid: 'u-' + session,

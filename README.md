@@ -50,6 +50,10 @@ Run the test suite with:
 npm test
 ```
 
+The tests never touch your own install: each suite gets its own temporary
+state folder (see `CLAUDINATOR_STATE_DIR` below) and removes it when done, so
+your cache, marks and settings come out of a test run byte-for-byte unchanged.
+
 ---
 
 ## What the dashboard shows
@@ -444,6 +448,11 @@ whatever you had in there.
 `CLAUDINATOR_ROOTS` (path-delimiter separated) and `PORT` override the file.
 Both are read at boot; everything else is re-read on each fetch, so edits —
 from the page or from an editor — apply without a restart.
+
+`CLAUDINATOR_STATE_DIR` moves everything Claudinator writes — the parse cache
+(`.cache/`), `compact-marks.json` and `config.json` — to another folder. The
+default is the folder `server.js` is in. `pricing.json` is not state and stays
+with the code.
 
 ---
 

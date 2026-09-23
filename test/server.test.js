@@ -14,14 +14,22 @@ const BASE = 'http://127.0.0.1:' + PORT;
 
 let child;
 let emptyRoot;
+// The server's own cache, marks and settings, so the tests never write into
+// the real install's - and never read its settings either.
+let stateDir;
 
 // Start the real server against an empty transcript root so the tests never
 // depend on the developer's own usage.
 test.before(async () => {
   emptyRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'claudinator-roots-'));
+  stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'claudinator-state-'));
   child = spawn(process.execPath, ['server.js'], {
     cwd: ROOT,
-    env: Object.assign({}, process.env, { PORT: String(PORT), CLAUDINATOR_ROOTS: emptyRoot }),
+    env: Object.assign({}, process.env, {
+      PORT: String(PORT),
+      CLAUDINATOR_ROOTS: emptyRoot,
+      CLAUDINATOR_STATE_DIR: stateDir,
+    }),
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   await new Promise((resolve, reject) => {
@@ -39,6 +47,7 @@ test.before(async () => {
 test.after(() => {
   if (child) child.kill();
   if (emptyRoot) fs.rmSync(emptyRoot, { recursive: true, force: true });
+  if (stateDir) fs.rmSync(stateDir, { recursive: true, force: true });
 });
 
 test('serves the dashboard and its assets', async () => {
@@ -157,8 +166,6 @@ test('filters are echoed back and applied', async () => {
 });
 
 test('/api/compact-mark writes, clears, and refuses bad callers', async () => {
-  const marksFile = path.join(ROOT, 'compact-marks.json');
-  const had = fs.existsSync(marksFile) ? fs.readFileSync(marksFile) : null;
   try {
     const post = (body, headers) =>
       fetch(BASE + '/api/compact-mark', {
@@ -186,14 +193,12 @@ test('/api/compact-mark writes, clears, and refuses bad callers', async () => {
     const cleared = await post({ session: 'test-session', clear: true });
     assert.equal('test-session' in (await cleared.json()).marks, false);
   } finally {
-    if (had) fs.writeFileSync(marksFile, had);
-    else fs.rmSync(marksFile, { force: true });
+    fs.rmSync(path.join(stateDir, 'compact-marks.json'), { force: true });
   }
 });
 
 test('/api/settings reads the knobs, and clamps what it is asked to write', async () => {
-  const cfgFile = path.join(ROOT, 'config.json');
-  const had = fs.existsSync(cfgFile) ? fs.readFileSync(cfgFile) : null;
+  const cfgFile = path.join(stateDir, 'config.json');
   const post = (body, headers) =>
     fetch(BASE + '/api/settings', {
       method: 'POST',
@@ -269,8 +274,7 @@ test('/api/settings reads the knobs, and clamps what it is asked to write', asyn
     assert.match((await broken.json()).error, /not valid JSON/);
     assert.equal(fs.readFileSync(cfgFile, 'utf8'), '{ this is not json', 'left alone');
   } finally {
-    if (had) fs.writeFileSync(cfgFile, had);
-    else fs.rmSync(cfgFile, { force: true });
+    fs.rmSync(cfgFile, { force: true });
   }
 });
 
