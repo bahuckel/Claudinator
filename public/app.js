@@ -1506,8 +1506,26 @@ function queryString() {
   return p.toString();
 }
 
+// The request whose answer will be shown. Anything older is either aborted
+// or, if its body was already on the way, thrown away when it lands.
+let inflight = null;
+let fetchSeq = 0;
+
 async function doFetch(quiet) {
-  if (state.busy) return;
+  // A click replaces whatever is in flight, so the last thing asked for is the
+  // thing shown. Returning early instead - as this once did - dropped the
+  // click but kept the new range selected, and the old range's data then
+  // arrived under the new range's label. AUTO is the exception: a timer never
+  // interrupts a fetch somebody asked for.
+  if (quiet && inflight) return;
+  if (inflight) inflight.abort();
+  const ctl = new AbortController();
+  inflight = ctl;
+  const seq = ++fetchSeq;
+  // Pinned now: the range and filters can change before the answer arrives.
+  const range = state.range;
+  const qs = queryString();
+
   state.busy = true;
   const btn = $('fetch');
   btn.disabled = true;
@@ -1517,25 +1535,33 @@ async function doFetch(quiet) {
     $('status').textContent = 'Reading transcripts…';
   }
   const t0 = performance.now();
-  $('csv').href = '/api/usage.csv?' + queryString(); // keep the export in step with the view
+  $('csv').href = '/api/usage.csv?' + qs; // keep the export in step with the view
   try {
-    const res = await fetch('/api/usage?' + queryString());
+    const res = await fetch('/api/usage?' + qs, { signal: ctl.signal });
     const body = await res.json();
+    if (seq !== fetchSeq) return; // superseded while the body was arriving
     if (!res.ok) throw new Error(body.error || res.statusText);
     state.data = body;
     renderAll();
-    const label = RANGES.find((r) => r.id === state.range).label;
+    const label = RANGES.find((r) => r.id === range).label;
     $('status').className = 'status';
     $('status').textContent =
       `${label} · ${windowText(body)} · ${full(body.totals.total)} tokens · ${money(body.totals.cost)} estimated · ` +
       `${Math.round(performance.now() - t0)} ms${state.auto ? ' · auto every ' + state.autoEvery / 1000 + 's' : ''}`;
   } catch (err) {
+    // Replaced by a newer request: not a failure, and not ours to report.
+    if (err.name === 'AbortError' || seq !== fetchSeq) return;
     $('status').className = 'status err';
     $('status').textContent = 'Fetch failed: ' + err.message;
   } finally {
-    state.busy = false;
-    btn.disabled = false;
-    btn.textContent = 'FETCH';
+    // Only the newest request may put the button back; an aborted one
+    // finishing late must not unlock it while its replacement still runs.
+    if (seq === fetchSeq) {
+      inflight = null;
+      state.busy = false;
+      btn.disabled = false;
+      btn.textContent = 'FETCH';
+    }
   }
 }
 
