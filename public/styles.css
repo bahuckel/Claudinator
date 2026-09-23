@@ -7,12 +7,67 @@
   --muted: #8d97a8;
   --accent: #d97757;
   --accent-dim: #7a4632;
+  /* The accent as text. In the dark theme it is the accent itself; the light
+     theme needs it a shade darker to read at small sizes on white, while
+     buttons keep the lighter one behind their dark text. */
+  --accent-text: #d97757;
   --c-input: #6aa9ff;
   --c-output: #d97757;
   --c-cwrite: #b98cff;
   --c-cread: #3f4a5c;
   --good: #4fbf87;
+  --c-other: #3f4a5c;
+  /* Text on an accent-filled button, and on a disabled one. */
+  --on-accent: #1a1108;
+  --on-accent-muted: #b9a294;
+  --err: #ff8080;
+  --row-line: #1e242e;
+  --tip-bg: #0a0c10f2;
+  --shadow: #0008;
+  --code-bg: #0a0c10;
+  --warn-bg: #2a1d14;
+  --warn-text: #f0d9cd;
+  /* Calendar intensity, low to high; the top step is --accent. */
+  --heat-1: #4a2e24;
+  --heat-2: #7a4632;
+  --heat-3: #b0603f;
   --radius: 12px;
+  color-scheme: dark;
+}
+
+/* Light theme, from the operating system's setting. Only the tokens change;
+   the accent is darkened a step so it keeps its contrast on white. */
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f5f6f8;
+    --panel: #ffffff;
+    --panel-2: #f0f2f5;
+    --line: #dce0e6;
+    --text: #1c2029;
+    --muted: #5f6878;
+    --accent: #c4623f;
+    --accent-dim: #e8c3b3;
+    --accent-text: #a84d2a;
+    --c-input: #3b7ddd;
+    --c-output: #d06a47;
+    --c-cwrite: #8a63d2;
+    --c-cread: #a9b2c0;
+    --good: #1e9b62;
+    --c-other: #c3cad4;
+    --on-accent: #1a1108;
+    --on-accent-muted: #7a4a37;
+    --err: #c0392b;
+    --row-line: #e8ebef;
+    --tip-bg: #fffffff5;
+    --shadow: #1c20292e;
+    --code-bg: #eef0f4;
+    --warn-bg: #fdf1eb;
+    --warn-text: #5a2f1f;
+    --heat-1: #f5d8cb;
+    --heat-2: #eab39c;
+    --heat-3: #dd8e6f;
+    color-scheme: light;
+  }
 }
 
 * {
@@ -54,7 +109,7 @@ h3 {
 
 .logo {
   font-size: 30px;
-  color: var(--accent);
+  color: var(--accent-text);
   line-height: 1;
 }
 
@@ -101,12 +156,12 @@ h3 {
 
 .ranges button.on {
   background: var(--accent);
-  color: #1a1108;
+  color: var(--on-accent);
 }
 
 .fetch {
   background: var(--accent);
-  color: #1a1108;
+  color: var(--on-accent);
   border: 0;
   padding: 11px 26px;
   border-radius: 10px;
@@ -122,7 +177,7 @@ h3 {
 
 .fetch:disabled {
   background: var(--accent-dim);
-  color: #b9a294;
+  color: var(--on-accent-muted);
   cursor: progress;
 }
 
@@ -133,8 +188,34 @@ h3 {
   min-height: 18px;
 }
 
+main {
+  transition: opacity 0.15s;
+}
+
+body.loading main {
+  opacity: 0.55;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  main {
+    transition: none;
+  }
+}
+
 .status.err {
-  color: #ff8080;
+  color: var(--err);
+}
+
+/* Keyboard focus. Only for keyboard use (:focus-visible), so a mouse click
+   does not leave a ring behind; inputs keep their own accent border. */
+:where(button, a, select, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+tr.clickable:focus-visible {
+  outline-offset: -2px;
 }
 
 /* ---------- layout ---------- */
@@ -224,7 +305,29 @@ section.grid-2 {
 }
 
 .kpi.hero .v {
-  color: var(--accent);
+  color: var(--accent-text);
+}
+
+/* Input / output / cache write / cache read, as shares of the total. */
+.kpi .mix {
+  display: flex;
+  height: 6px;
+  margin-top: 8px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--panel-2);
+}
+
+.kpi .mix i {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+}
+
+.kpi .mixnote {
+  color: var(--muted);
+  font-size: 11px;
+  margin-top: 4px;
 }
 
 /* ---------- charts ---------- */
@@ -247,7 +350,7 @@ section.grid-2 {
 
 .seg button.on {
   background: var(--accent);
-  color: #1a1108;
+  color: var(--on-accent);
   font-weight: 700;
 }
 
@@ -316,9 +419,36 @@ td:first-child {
   text-align: left;
 }
 
+/* Every column header sorts its table. The button fills the cell, so the
+   header keeps its own alignment and still reads as a header. */
+th .sort {
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+th .sort:hover,
+th[aria-sort] .sort {
+  color: var(--text);
+}
+
+th[aria-sort='descending'] .sort::after {
+  content: ' ▾';
+}
+
+th[aria-sort='ascending'] .sort::after {
+  content: ' ▴';
+}
+
 td {
   padding: 7px 8px;
-  border-bottom: 1px solid #1e242e;
+  border-bottom: 1px solid var(--row-line);
   text-align: right;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -416,7 +546,7 @@ td.namecell .sm {
 }
 
 .bd.top .rank {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .bd .meta {
@@ -454,13 +584,13 @@ td.namecell .sm {
 .tip {
   position: fixed;
   pointer-events: none;
-  background: #0a0c10f2;
+  background: var(--tip-bg);
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 9px 11px;
   font-size: 12px;
   z-index: 50;
-  box-shadow: 0 8px 24px #0008;
+  box-shadow: 0 8px 24px var(--shadow);
   max-width: 260px;
 }
 
@@ -524,7 +654,7 @@ td.namecell .sm {
 }
 
 .kpi .delta.up {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .kpi .delta.down {
@@ -555,9 +685,9 @@ td.namecell .sm {
   background: var(--panel-2);
 }
 
-.heat .cell.l1 { background: #4a2e24; }
-.heat .cell.l2 { background: #7a4632; }
-.heat .cell.l3 { background: #b0603f; }
+.heat .cell.l1 { background: var(--heat-1); }
+.heat .cell.l2 { background: var(--heat-2); }
+.heat .cell.l3 { background: var(--heat-3); }
 .heat .cell.l4 { background: var(--accent); }
 
 .heat .cell.future {
@@ -714,9 +844,9 @@ kbd {
 
 .cs .cmd {
   font: 12px/1 ui-monospace, Consolas, monospace;
-  background: #0a0c10;
+  background: var(--code-bg);
   border: 1px solid var(--line);
-  color: var(--accent);
+  color: var(--accent-text);
   padding: 7px 10px;
   border-radius: 7px;
   white-space: nowrap;
@@ -742,7 +872,7 @@ kbd {
 .badge.nag,
 .badge.auto {
   border-color: var(--accent-dim);
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 @media (max-width: 800px) {
@@ -771,7 +901,7 @@ kbd {
 }
 
 .fold:hover h2 {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .fold .chev {
@@ -812,7 +942,7 @@ kbd {
 
 .markbtn {
   background: var(--accent);
-  color: #1a1108;
+  color: var(--on-accent);
   border: 0;
   border-radius: 7px;
   padding: 7px 12px;
@@ -828,7 +958,7 @@ kbd {
 
 .markbtn:disabled {
   background: var(--accent-dim);
-  color: #b9a294;
+  color: var(--on-accent-muted);
   cursor: progress;
 }
 
@@ -848,7 +978,7 @@ kbd {
 
 .ghost.on {
   background: var(--accent);
-  color: #1a1108;
+  color: var(--on-accent);
   border-color: var(--accent);
 }
 
@@ -921,18 +1051,18 @@ kbd {
 }
 
 .warn {
-  background: #2a1d14;
+  background: var(--warn-bg);
   border: 1px solid var(--accent-dim);
   border-left: 3px solid var(--accent);
   border-radius: 9px;
   padding: 10px 14px;
   margin: 0 2px 14px;
   font-size: 12.5px;
-  color: #f0d9cd;
+  color: var(--warn-text);
 }
 
 .warn code {
-  background: #0a0c10;
+  background: var(--code-bg);
   padding: 1px 5px;
   border-radius: 4px;
   font-size: 11.5px;
@@ -944,7 +1074,7 @@ tr.clickable {
 
 tr.clickable:hover .lbl,
 tr.clickable:hover .title {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .notifyrow {
@@ -1095,7 +1225,7 @@ tr.clickable:hover .title {
 .knobnote {
   margin-top: 6px;
   font-size: 12px;
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .knobnote b {
@@ -1123,7 +1253,7 @@ tr.clickable:hover .title {
 }
 
 .primary {
-  color: #1a1108;
+  color: var(--on-accent);
   background: var(--accent);
   border: 1px solid var(--accent);
   border-radius: 10px;
@@ -1153,7 +1283,7 @@ tr.clickable:hover .title {
 }
 
 .primary:disabled:hover {
-  color: #1a1108;
+  color: var(--on-accent);
   border-color: var(--accent);
 }
 
@@ -1253,7 +1383,7 @@ tr.clickable:hover .title {
   gap: 12px;
   align-items: center;
   padding: 7px 10px;
-  border-bottom: 1px solid #1e242e;
+  border-bottom: 1px solid var(--row-line);
   font-size: 12px;
 }
 
@@ -1302,7 +1432,7 @@ tr.clickable:hover .title {
   justify-content: space-between;
   gap: 12px;
   padding: 6px 10px;
-  border-bottom: 1px solid #1e242e;
+  border-bottom: 1px solid var(--row-line);
   font-size: 12.5px;
   overflow: hidden;
 }

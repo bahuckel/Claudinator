@@ -56,8 +56,17 @@ function defaultValues() {
   return out;
 }
 
-function sendJson(res, code, body) {
-  send(res, code, 'application/json; charset=utf-8', JSON.stringify(body));
+function sendJson(res, code, body, extra) {
+  send(res, code, 'application/json; charset=utf-8', JSON.stringify(body), extra);
+}
+
+/**
+ * Where a fetch's time went, as a Server-Timing header: browser devtools show
+ * it beside the request. The scan is the part that reads files and is usually
+ * cached; the aggregate is the part that grows with the corpus.
+ */
+function serverTiming(t) {
+  return t ? { 'Server-Timing': `scan;dur=${t.scanMs}, aggregate;dur=${t.aggregateMs}` } : {};
 }
 
 function serveStatic(res, urlPath) {
@@ -85,7 +94,9 @@ function serveStatic(res, urlPath) {
 async function usageFor(range, filter) {
   const cfg = loadConfig(); // reloaded each fetch so edits apply live
   const pricing = loadPricing();
+  const t0 = process.hrtime.bigint();
   const { records, sessionMeta, toolCalls, compactions, stats } = await scan(cfg.roots, cfg);
+  const t1 = process.hrtime.bigint();
   const data = aggregate(
     records,
     range,
@@ -97,7 +108,9 @@ async function usageFor(range, filter) {
     filter,
     compactions
   );
+  const ms = (a, b) => Math.round(Number(b - a) / 1e5) / 10;
   data.scan = stats;
+  data.timing = { scanMs: ms(t0, t1), aggregateMs: ms(t1, process.hrtime.bigint()) };
   return data;
 }
 
@@ -202,11 +215,11 @@ const server = http.createServer((req, res) => {
     usageFor(range, filter)
       .then((data) => {
         if (url.pathname.endsWith('.csv')) {
-          send(res, 200, 'text/csv; charset=utf-8', toCsv(data), {
+          send(res, 200, 'text/csv; charset=utf-8', toCsv(data), Object.assign({
             'Content-Disposition': 'attachment; filename="claudinator-' + range + '.csv"',
-          });
+          }, serverTiming(data.timing)));
         } else {
-          sendJson(res, 200, data);
+          sendJson(res, 200, data, serverTiming(data.timing));
         }
       })
       .catch((err) => {

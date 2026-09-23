@@ -509,6 +509,80 @@ test('a copy with its usage zeroed never outranks the real record', async () => 
   assert.equal(out.records[0].out, 20, 'the real usage survived');
 });
 
+// How costOf will read a pricing.json row, as assertions. Shared by the check
+// on the shipped file and the check that the check still bites.
+const RATE = (v) => typeof v === 'number' && Number.isFinite(v) && v > 0;
+const MULT_KEYS = ['write5m', 'write1h', 'read'];
+const ROW_KEYS = ['input', 'output', 'cacheMultipliers', 'fast', 'context'];
+
+function checkMultipliers(m, at) {
+  assert.ok(m && typeof m === 'object', at + ' is an object');
+  for (const k of Object.keys(m)) {
+    assert.ok(MULT_KEYS.includes(k), at + ': unknown multiplier "' + k + '"');
+    assert.ok(RATE(m[k]) && m[k] <= 2, at + '.' + k + ' is in (0, 2], got ' + m[k]);
+  }
+}
+
+function checkPricingRow(r, at) {
+  for (const k of Object.keys(r)) assert.ok(ROW_KEYS.includes(k), at + ': unknown key "' + k + '"');
+  assert.ok(RATE(r.input), at + '.input is a positive number');
+  assert.ok(RATE(r.output), at + '.output is a positive number');
+  // Every Claude model bills output above input; a row that does not is a typo.
+  assert.ok(r.output > r.input, at + ': output rate below input rate');
+  if ('cacheMultipliers' in r) checkMultipliers(r.cacheMultipliers, at + '.cacheMultipliers');
+  if ('fast' in r) {
+    for (const k of Object.keys(r.fast)) assert.ok(['input', 'output'].includes(k), at + '.fast: unknown key "' + k + '"');
+    assert.ok(RATE(r.fast.input) && RATE(r.fast.output), at + '.fast has both rates');
+    assert.ok(r.fast.input >= r.input && r.fast.output >= r.output, at + '.fast is not cheaper than standard');
+  }
+  if ('context' in r) assert.ok(Number.isInteger(r.context) && r.context >= 100000, at + '.context is a token count');
+}
+
+test('pricing.json is well formed, row by row', () => {
+  // The file is edited by hand, and a typo does not fail loudly: a row with
+  // "inptu" prices every call at $0, and a stray key is simply ignored. This
+  // reads the file as shipped and checks every row the way costOf will use it.
+  const pricing = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'pricing.json'), 'utf8'));
+
+  checkMultipliers(pricing.cacheMultipliers, 'cacheMultipliers');
+  for (const k of MULT_KEYS) assert.ok(k in pricing.cacheMultipliers, 'cacheMultipliers.' + k + ' is set');
+  assert.ok(Number.isInteger(pricing.contextWindow) && pricing.contextWindow >= 100000, 'contextWindow');
+  for (const k of ['webSearchPer1k', 'webFetchPer1k']) {
+    const v = pricing.serverTools[k];
+    assert.ok(typeof v === 'number' && v >= 0, 'serverTools.' + k);
+  }
+
+  checkPricingRow(pricing.default, 'default');
+  for (const [name, r] of Object.entries(pricing.families)) checkPricingRow(r, 'families.' + name);
+
+  const ids = Object.keys(pricing.models);
+  assert.ok(ids.length > 0);
+  for (const id of ids) {
+    checkPricingRow(pricing.models[id], 'models.' + id);
+    // Rows are undated: a dated id is matched to its row by stripping the date.
+    assert.match(id, /^claude-[a-z0-9-]+$/, 'models.' + id + ' looks like a model id');
+    assert.doesNotMatch(id, /-\d{8}$/, 'models.' + id + ' carries no date suffix');
+    // And every listed model gets a readable name on the page.
+    assert.notEqual(modelLabel(id), id, 'models.' + id + ' has a display name');
+  }
+});
+
+test('the pricing check catches the typos it is for', () => {
+  // The same checker, pointed at deliberately broken rows, so an edit to it
+  // cannot quietly stop checking anything.
+  const bad = [
+    { inptu: 5, output: 25 },
+    { input: 5, output: 25, ouput: 25 },
+    { input: 25, output: 5 },
+    { input: 5, output: 25, fast: { input: 10 } },
+    { input: 5, output: 25, cacheMultipliers: { read: 10 } },
+    { input: 5, output: 25, cacheMultipliers: { reads: 0.1 } },
+    { input: 5, output: 25, context: '1M' },
+  ];
+  for (const r of bad) assert.throws(() => checkPricingRow(r, 'x'), JSON.stringify(r) + ' should be rejected');
+  assert.doesNotThrow(() => checkPricingRow({ input: 5, output: 25, fast: { input: 10, output: 50 }, context: 200000 }, 'x'));
+});
+
 test('a model can override the cache multipliers it is billed at', () => {
   // Fable 5.1 and Mythos 5.1 read cache at 0.025x their input rate, not the
   // usual 0.1x. Cache reads are most of what an agentic session spends, so a

@@ -21,7 +21,7 @@ const PALETTE = [
   '#d97757', '#6aa9ff', '#4fbf87', '#b98cff', '#f2c14e', '#ff7eb6',
   '#5fd3d3', '#ff9f43', '#9bb0c9', '#c8e06b', '#e26d6d', '#7f8cff',
 ];
-const OTHER_COLOR = '#3f4a5c';
+const OTHER_COLOR = 'var(--c-other)';
 const MAX_STACK_KEYS = 8;
 
 const STACK_DIMS = { project: 'byProject', model: 'byModel', effort: 'byEffort' };
@@ -36,6 +36,8 @@ const state = {
   marksOpen: false,
   idleOpen: false,
   knobsOpen: false,
+  // Column sort per table, by the table's host id: { col, dir }.
+  sorts: {},
   // { values, defaults, tunables } from /api/settings, plus the unsaved edits.
   settings: null,
   draft: {},
@@ -66,6 +68,11 @@ function loadPrefs() {
     if (typeof p.compactOpen === 'boolean') state.compactOpen = p.compactOpen;
     if (typeof p.marksOpen === 'boolean') state.marksOpen = p.marksOpen;
     if (typeof p.idleOpen === 'boolean') state.idleOpen = p.idleOpen;
+    if (p.sorts && typeof p.sorts === 'object') {
+      for (const [k, v] of Object.entries(p.sorts)) {
+        if (v && Number.isInteger(v.col) && (v.dir === 'asc' || v.dir === 'desc')) state.sorts[k] = v;
+      }
+    }
     if (typeof p.knobsOpen === 'boolean') state.knobsOpen = p.knobsOpen;
     if (typeof p.auto === 'boolean') state.auto = p.auto;
     if (Number.isFinite(p.autoEvery)) state.autoEvery = p.autoEvery;
@@ -87,6 +94,7 @@ function savePrefs() {
         marksOpen: state.marksOpen,
         idleOpen: state.idleOpen,
         knobsOpen: state.knobsOpen,
+        sorts: state.sorts,
         auto: state.auto,
         autoEvery: state.autoEvery,
         notify: state.notify,
@@ -183,6 +191,74 @@ function spanLabel(hours) {
 function tableWrap(html) {
   return `<div class="tablewrap">${html}</div>`;
 }
+
+/* Column sorting ----------------------------------------------------
+ * Every header is a button. Numeric cells carry their raw value in data-v,
+ * so "2.25B" and "$6,453" sort as numbers; the name column sorts as text.
+ * The choice is kept per table across fetches. With none chosen, a table is
+ * in the server's order - most tokens first - and says so.
+ */
+function cellValue(row, col) {
+  const td = row.cells[col];
+  if (!td) return '';
+  if (td.dataset.v !== undefined) return Number(td.dataset.v);
+  // The name cell also holds a grey line of detail (a path, a date); sort on
+  // the name alone, which it carries in data-s.
+  return td.dataset.s !== undefined ? td.dataset.s : td.textContent.trim();
+}
+
+function sortRows(table, col, dir) {
+  const body = table.tBodies[0];
+  const sign = dir === 'asc' ? 1 : -1;
+  const rows = [...body.rows];
+  rows.sort((a, b) => {
+    const x = cellValue(a, col);
+    const y = cellValue(b, col);
+    return sign * (typeof x === 'number' && typeof y === 'number'
+      ? x - y
+      : String(x).localeCompare(String(y), undefined, { sensitivity: 'base', numeric: true }));
+  });
+  for (const r of rows) body.appendChild(r);
+}
+
+function markSorted(table, col, dir) {
+  const cells = table.tHead.rows[0].cells;
+  for (const th of cells) th.removeAttribute('aria-sort');
+  if (cells[col]) cells[col].setAttribute('aria-sort', dir === 'asc' ? 'ascending' : 'descending');
+}
+
+function enhanceTables() {
+  for (const wrap of document.querySelectorAll('.tablewrap')) {
+    const table = wrap.querySelector('table');
+    if (!table || !table.tHead || !table.tBodies[0]) continue;
+    [...table.tHead.rows[0].cells].forEach((th, i) => {
+      if (!th.querySelector('.sort')) th.innerHTML = `<button type="button" class="sort" data-col="${i}">${th.innerHTML}</button>`;
+    });
+    const saved = state.sorts[wrap.parentElement.id];
+    if (saved) {
+      sortRows(table, saved.col, saved.dir);
+      markSorted(table, saved.col, saved.dir);
+    } else {
+      markSorted(table, 1, 'desc'); // as the server sent it
+    }
+  }
+}
+
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('.tablewrap th .sort');
+  if (!btn) return;
+  const table = btn.closest('table');
+  const host = btn.closest('.tablewrap').parentElement.id;
+  const col = Number(btn.dataset.col);
+  const first = table.tBodies[0].rows[0];
+  const numeric = !!(first && first.cells[col] && first.cells[col].dataset.v !== undefined);
+  const cur = state.sorts[host] || { col: 1, dir: 'desc' };
+  const dir = cur.col === col ? (cur.dir === 'asc' ? 'desc' : 'asc') : numeric ? 'desc' : 'asc';
+  state.sorts[host] = { col, dir };
+  savePrefs();
+  sortRows(table, col, dir);
+  markSorted(table, col, dir);
+});
 
 function shortDate(iso) {
   const [, m, d] = iso.split('-');
@@ -612,8 +688,19 @@ function renderKpis() {
   const t = d.totals;
   const p = d.previous || {};
   const waste = d.cacheWaste || { tokens: 0, cost: 0 };
+  // Nearly all of an agentic session's tokens are cache reads - the whole
+  // context re-read on every turn - which is why this number dwarfs input
+  // plus output. The bar makes that visible instead of leaving it to surprise.
+  const whole = t.total || 1;
+  const mixTip = TYPE_SERIES.map((x) => `${x.label} ${pct(t[x.key] / whole)}`).join(' · ');
+  const mix =
+    `<div class="mix" title="${esc(mixTip)}">` +
+    TYPE_SERIES.filter((x) => t[x.key] > 0)
+      .map((x) => `<i style="width:${((t[x.key] / whole) * 100).toFixed(2)}%;background:${x.color}"></i>`)
+      .join('') +
+    `</div><div class="mixnote">${pct(t.cacheRead / whole)} cache reads — context re-read each turn</div>`;
   const cards = [
-    { k: 'Total tokens', v: fmt(t.total), s: full(t.total), delta: deltaHtml(t.total, p.total, fmt), hero: true },
+    { k: 'Total tokens', v: fmt(t.total), s: full(t.total), delta: deltaHtml(t.total, p.total, fmt), hero: true, extra: mix },
     { k: 'Est. cost', v: money(t.cost), s: money(d.costPerActiveDay) + ' per active day', delta: deltaHtml(t.cost, p.cost, money) },
     { k: 'Output', v: fmt(t.output), s: fmt(t.thinking) + ' thinking', delta: deltaHtml(t.output, p.output, fmt) },
     { k: 'Cache hit rate', v: pct(d.cacheHitRate), s: 'of prompt tokens served from cache' },
@@ -644,7 +731,7 @@ function renderKpis() {
     .map(
       (c) =>
         `<div class="kpi${c.hero ? ' hero' : ''}"${c.tip ? ` title="${esc(c.tip)}"` : ''}><div class="k">${esc(c.k)}</div>` +
-        `<div class="v">${esc(c.v)}</div><div class="s">${esc(c.s || '')}</div>${c.delta || ''}</div>`
+        `<div class="v">${esc(c.v)}</div><div class="s">${esc(c.s || '')}</div>${c.extra || ''}${c.delta || ''}</div>`
     )
     .join('');
 }
@@ -1356,11 +1443,12 @@ function breakdownTable(host, list, opts) {
         ? ` data-filter-key="${o.filterKey}" data-filter-value="${esc(r.filterValue || r.name)}"`
         : '';
       return (
-        `<tr${o.filterKey ? ' class="clickable"' : ''}${filterAttr}>` +
-        `<td class="rowbar"><div class="fill" style="width:${w}%"></div>` +
+        `<tr${o.filterKey ? ' class="clickable" tabindex="0"' : ''}${filterAttr}>` +
+        `<td class="rowbar" data-s="${esc(r.label || r.name)}"><div class="fill" style="width:${w}%"></div>` +
         `<div class="lbl name" title="${esc(r.title || r.name)}">${esc(r.label || r.name)}${sub}</div></td>` +
-        `<td>${fmt(r.total)}</td><td>${pct(r.total / grand)}</td><td>${fmt(r.output)}</td>` +
-        `<td>${fmt(r.cacheRead)}</td><td>${full(r.messages)}</td><td>${money(r.cost)}</td>` +
+        `<td data-v="${r.total}">${fmt(r.total)}</td><td data-v="${r.total}">${pct(r.total / grand)}</td>` +
+        `<td data-v="${r.output}">${fmt(r.output)}</td><td data-v="${r.cacheRead}">${fmt(r.cacheRead)}</td>` +
+        `<td data-v="${r.messages}">${full(r.messages)}</td><td data-v="${r.cost}">${money(r.cost)}</td>` +
         `</tr>`
       );
     })
@@ -1412,14 +1500,15 @@ function renderTools() {
     .map((t) => {
       const w = ((t.tokens / max) * 100).toFixed(1);
       const imgCell = anyImages
-        ? `<td title="${t.images ? full(t.images) + ' image blocks, charged at a flat rate each' : 'text only'}">` +
+        ? `<td data-v="${t.images || 0}" title="${t.images ? full(t.images) + ' image blocks, charged at a flat rate each' : 'text only'}">` +
           `${t.images ? full(t.images) : '—'}</td>`
         : '';
       return (
-        `<tr><td class="rowbar"><div class="fill" style="width:${w}%"></div>` +
+        `<tr><td class="rowbar" data-s="${esc(toolLabel(t.name))}"><div class="fill" style="width:${w}%"></div>` +
         `<div class="lbl name" title="${esc(t.name)}">${esc(toolLabel(t.name))}</div></td>` +
-        `<td>${fmt(t.tokens)}</td><td>${pct(t.tokens / (totalTokens || 1))}</td>` +
-        `<td>${full(t.calls)}</td>${imgCell}<td>${fmt(t.tokens / t.calls)}</td></tr>`
+        `<td data-v="${t.tokens}">${fmt(t.tokens)}</td><td data-v="${t.tokens}">${pct(t.tokens / (totalTokens || 1))}</td>` +
+        `<td data-v="${t.calls}">${full(t.calls)}</td>${imgCell}` +
+        `<td data-v="${t.tokens / t.calls}">${fmt(t.tokens / t.calls)}</td></tr>`
       );
     })
     .join('');
@@ -1505,12 +1594,13 @@ function renderSessions() {
       const resumed = s.transcripts > 1 ? ` · +${s.transcripts - 1} resumed` : '';
       const started = s.startedAt ? `started ${dayLabel(s.startedAt)} · ` : '';
       return (
-        `<tr class="clickable" data-filter-key="conversation" data-filter-value="${esc(s.name)}" ` +
+        `<tr class="clickable" tabindex="0" data-filter-key="conversation" data-filter-value="${esc(s.name)}" ` +
         `title="${esc(s.name)}${s.title ? '\n' + esc(s.title) : ''}${s.transcripts > 1 ? '\n' + s.transcripts + ' transcripts' : ''}">` +
-        `<td class="namecell"><span class="title">${esc(title)}</span>` +
+        `<td class="namecell" data-s="${esc(title)}"><span class="title">${esc(title)}</span>` +
         `<div class="sm hint">${esc(s.project)} · ${started}last ${when} · ${s.name.slice(0, 8)}${resumed}</div></td>` +
-        `<td>${fmt(s.total)}</td><td>${fmt(s.output)}</td><td>${full(s.messages)}</td>` +
-        `<td>${fmt(s.contextNow)}</td><td>${span}</td><td>${money(s.cost)}</td></tr>`
+        `<td data-v="${s.total}">${fmt(s.total)}</td><td data-v="${s.output}">${fmt(s.output)}</td>` +
+        `<td data-v="${s.messages}">${full(s.messages)}</td><td data-v="${s.contextNow}">${fmt(s.contextNow)}</td>` +
+        `<td data-v="${s.last - s.first}">${span}</td><td data-v="${s.cost}">${money(s.cost)}</td></tr>`
       );
     })
     .join('');
@@ -1559,11 +1649,21 @@ function renderScanInfo() {
   $('scaninfo').innerHTML =
     `${s.files} transcript files (${(s.bytes / 1048576).toFixed(1)} MB) · ${s.records} usage records · ` +
     `${full(s.toolResults || 0)} tool results · ${s.filesParsed} parsed / ${s.filesCached} cached · ` +
-    `scan ${s.scanMs} ms · fetched ${gen} · roots: ${esc(s.roots.join(', '))} · ` +
+    // Scan is file reading, mostly cached; aggregate is the part that grows
+    // with the corpus. Both, so a slow fetch says which half was slow.
+    (state.data.timing
+      ? `scan ${state.data.timing.scanMs} ms · aggregate ${state.data.timing.aggregateMs} ms · `
+      : `scan ${s.scanMs} ms · `) +
+    `fetched ${gen} · roots: ${esc(s.roots.join(', '))} · ` +
     `<kbd>R</kbd> refetch · <kbd>T</kbd> auto`;
 }
 
 function renderAll() {
+  renderAllPanels();
+  enhanceTables();
+}
+
+function renderAllPanels() {
   const d = state.data;
   $('main').hidden = false; // charts need real layout widths
   renderWarnings();
@@ -1638,6 +1738,8 @@ async function doFetch(quiet) {
   const btn = $('fetch');
   btn.disabled = true;
   btn.textContent = quiet ? 'AUTO…' : 'SCANNING…';
+  // Dims what is on screen rather than blanking it. AUTO refreshes quietly.
+  if (!quiet) document.body.classList.add('loading');
   if (!quiet) {
     $('status').className = 'status';
     $('status').textContent = 'Reading transcripts…';
@@ -1667,6 +1769,7 @@ async function doFetch(quiet) {
     if (seq === fetchSeq) {
       inflight = null;
       state.busy = false;
+      document.body.classList.remove('loading');
       btn.disabled = false;
       btn.textContent = 'FETCH';
     }
@@ -1841,6 +1944,14 @@ $('filterBar').addEventListener('click', (e) => {
 });
 
 $('fetch').addEventListener('click', () => doFetch());
+
+// Clickable rows are focusable (tabindex); Enter or Space does what a click does.
+document.addEventListener('keydown', (e) => {
+  const row = e.target.closest && e.target.closest('tr.clickable');
+  if (!row || (e.key !== 'Enter' && e.key !== ' ')) return;
+  e.preventDefault(); // Space would scroll the page
+  row.click();
+});
 
 document.addEventListener('keydown', (e) => {
   if (e.ctrlKey || e.metaKey || e.altKey) return;

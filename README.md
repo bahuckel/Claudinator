@@ -58,6 +58,10 @@ your cache, marks and settings come out of a test run byte-for-byte unchanged.
 
 ## What the dashboard shows
 
+The page follows your operating system's light or dark setting. While a fetch
+you asked for runs, the last result stays on screen, dimmed; AUTO refreshes
+swap it in without dimming.
+
 ### Fetching
 
 Press **FETCH** (or the `R` key) to rescan your transcripts. The status line
@@ -80,6 +84,12 @@ cache never reused, requests and active days, plus a **Fast mode** card when any
 turn ran at `speed: "fast"` and a **Server tools** card when web search or web
 fetch was used. Where a comparable previous window exists (the 7 days before the
 current 7, for example), each card also shows the change against it.
+
+Under **Total tokens** a thin bar splits it into input, output, cache write and
+cache read. On an agentic workload cache reads are nearly all of it — the whole
+context re-read every turn — which is why the number dwarfs what tools counting
+only input and output report; the bar says so at a glance, and hovering it gives
+the exact shares.
 
 **Requests** are API requests, not chat messages: every tool round-trip is one,
 so a single reply can be dozens. Under it is the number of **conversations** —
@@ -263,6 +273,14 @@ slice. Active filters show as chips under the header; remove one with its
 cross, or clear them all with `Escape`. The CSV export follows the current
 filter.
 
+Every column header **sorts** its table; click again to reverse. Each table
+remembers its sort across refreshes, and with none chosen it is in the
+server's order — most tokens first — which the header marks.
+
+Everything works from the **keyboard**: `Tab` reaches every control and every
+clickable row, with a visible focus ring, and `Enter` or `Space` on a row
+filters just as a click does. `R` refetches and `T` toggles AUTO.
+
 ### Export
 
 The **CSV** button downloads the daily series for the current range
@@ -444,7 +462,11 @@ and is already counted).
 
 This is an **estimate, not a bill.** A Claude subscription is not billed per
 token, and published rates change. Edit `pricing.json` to match your own
-numbers — it is re-read on every fetch, so no restart is needed.
+numbers — it is re-read on every fetch, so no restart is needed. A typo there
+does not fail loudly (a row with `"inptu"` prices every call at $0), so
+`npm test` checks every row: known keys only, positive rates, output above
+input, fast mode not cheaper than standard, multipliers in (0, 2], and a
+display name for every listed model.
 
 ---
 
@@ -527,6 +549,12 @@ Parsed files are cached in `.cache/records.json`, keyed on each file's size and
 mtime, so only changed transcripts are re-read and the cache file is only
 rewritten when something actually changed. A cold scan of ~90 MB of transcripts
 takes about half a second; warm scans are around 10 ms.
+
+Each fetch reports where its time went: the footer shows the scan (reading
+files, mostly cached) and the aggregate (everything computed from them)
+separately, and `/api/usage` sends the same as a `Server-Timing` header, which
+browser devtools display beside the request. On the corpus this was built
+against the aggregate for a month takes about 100 ms.
 
 ---
 

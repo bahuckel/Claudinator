@@ -149,6 +149,17 @@ test('/api/usage validates the range and returns a full shape', async () => {
   assert.equal(d.compact.suggestions.length, 0);
 });
 
+test('/api/usage says where its time went', async () => {
+  const res = await fetch(BASE + '/api/usage?range=7d');
+  assert.equal(res.status, 200);
+  const header = res.headers.get('server-timing');
+  assert.match(header, /^scan;dur=[\d.]+, aggregate;dur=[\d.]+$/, 'devtools can show it');
+  const body = await res.json();
+  assert.equal(typeof body.timing.scanMs, 'number');
+  assert.equal(typeof body.timing.aggregateMs, 'number');
+  assert.ok(header.includes('dur=' + body.timing.aggregateMs), 'header and payload agree');
+});
+
 test('/api/usage.csv sets a download header and a header row', async () => {
   const res = await fetch(BASE + '/api/usage.csv?range=7d');
   assert.equal(res.status, 200);
