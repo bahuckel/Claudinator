@@ -230,6 +230,72 @@ test('a conversation resumed into new sessions is one suggestion, not three', as
   assert.equal(list[0].messages, 18, 'the whole conversation, counted once');
 });
 
+test('usage is counted and listed by conversation, not by transcript', async () => {
+  // One conversation resumed twice is three transcripts on disk. The KPI, the
+  // top list and the filter all have to treat it as the one thing it is - and
+  // it has to keep the day it began even when the range starts later.
+  const root = tmpDir();
+  const day = 86400000;
+  const now = Date.now();
+  const at = (i) => (i === 1 ? now - 20 * day : now - 2 * day + i * 60000);
+  const call = (session, i) => {
+    const rec = assistant({
+      sessionId: session,
+      requestId: 'req-' + i,
+      timestamp: new Date(at(i)).toISOString(),
+    });
+    rec.message.id = 'msg-' + i;
+    rec.message.usage = {
+      input_tokens: 0,
+      output_tokens: 50,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 300000,
+    };
+    return rec;
+  };
+  const run = (session, to) => {
+    const out = [];
+    for (let i = 1; i <= to; i++) out.push(call(session, i));
+    return out;
+  };
+  writeJsonl(path.join(root, 'gen1.jsonl'), run('s-gen1', 4));
+  writeJsonl(path.join(root, 'gen2.jsonl'), run('s-gen2', 8));
+  writeJsonl(path.join(root, 'gen3.jsonl'), run('s-gen3', 12));
+  // And one unrelated conversation, so "one" is not the only answer possible.
+  const other = assistant({ sessionId: 's-other', requestId: 'req-o', timestamp: new Date(now - day).toISOString() });
+  other.message.id = 'msg-o';
+  writeJsonl(path.join(root, 'other.jsonl'), [other]);
+
+  const out = await scan([root], { inferProjectFromPaths: false });
+  const pricing = {
+    cacheMultipliers: { write5m: 1.25, write1h: 2, read: 0.1 },
+    default: { input: 5, output: 25 },
+    models: {},
+  };
+  const opts = { compactThresholdTokens: 100000 };
+  const agg = aggregate(out.records, 'all', pricing, {}, opts, {}, []);
+
+  assert.equal(agg.conversationCount, 2);
+  assert.equal(agg.sessionCount, 4, 'transcripts are still reported, just not as the headline');
+  const top = agg.sessions.find((x) => x.name === 's-gen3');
+  assert.ok(top, 'the row is named for the live session');
+  assert.equal(agg.sessions.length, 2, 'one row per conversation');
+  assert.equal(top.transcripts, 3);
+  assert.equal(top.messages, 12, 'every request in the chain, once');
+
+  // The filter narrows to the whole chain, not one transcript of it.
+  const only = aggregate(out.records, 'all', pricing, {}, opts, {}, [], { conversation: 's-gen3' });
+  assert.equal(only.totals.messages, 12);
+  assert.equal(only.conversationCount, 1);
+
+  // A 7-day range cuts off the first request, 20 days back. The card must
+  // still say when the conversation began, not when the window did.
+  const week = aggregate(out.records, '7d', pricing, {}, opts, {}, []);
+  const card = week.compact.suggestions.find((x) => x.session === 's-gen3');
+  assert.equal(card.startedAt, at(1));
+  assert.equal(week.sessions.find((x) => x.name === 's-gen3').startedAt, at(1));
+});
+
 test('a mark on any session in a chain silences the whole conversation', async () => {
   const root = tmpDir();
   const base = Date.parse('2026-09-04T10:00:00.000Z');

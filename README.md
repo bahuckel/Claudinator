@@ -76,10 +76,16 @@ browser.
 ### KPI cards
 
 Total tokens, estimated cost, output (with the thinking share), cache hit rate,
-cache never reused, messages and active days, plus a **Fast mode** card when any
+cache never reused, requests and active days, plus a **Fast mode** card when any
 turn ran at `speed: "fast"` and a **Server tools** card when web search or web
 fetch was used. Where a comparable previous window exists (the 7 days before the
 current 7, for example), each card also shows the change against it.
+
+**Requests** are API requests, not chat messages: every tool round-trip is one,
+so a single reply can be dozens. Under it is the number of **conversations** —
+what you would call sessions. Resuming a session starts a new transcript on
+disk, so there are usually more transcripts than conversations; hover the card
+for both.
 
 **Cache hit rate** is the share of prompt tokens that were served from cache
 instead of being sent fresh. On long agentic sessions this is normally very
@@ -103,8 +109,13 @@ turn tracks its context size. Claudinator measures that context directly: for
 the latest main-thread turn of each session, `input + cache write + cache read`
 is what the model had to read to answer.
 
-Sessions at or above `compactThresholdTokens` (default 150,000) are grouped by
-project and listed with:
+Conversations at or above `compactThresholdTokens` (default 150,000) are grouped
+by project and listed with:
+
+- when the conversation began and the first eight characters of its session id,
+  next to the title. Claude Code titles a conversation by what it is about, so a
+  project worked on every day produces a run of cards with the same name; the
+  date and id are what tell them apart;
 
 - current context per turn, against a 1M window, plus the peak it has reached;
 - cost per turn right now, and **what share of that is pure re-reading**;
@@ -113,8 +124,13 @@ project and listed with:
 - what `/compact` would save per turn, and over the next 50 turns (assuming the
   context lands near `compactTargetTokens`, priced at the cache-read rate);
 - how much of that context is **tool output**, and which tool dominates it;
-- an `idle Nd` badge for sessions untouched for longer than `compactIdleHours`
-  (default 48) — those only matter if you resume them.
+- an `idle Nd` badge for conversations untouched for longer than
+  `compactIdleHours` (default 48).
+
+Idle conversations are **folded away** under a closed *Idle* row at the bottom of
+the panel, and the headline counts only the active ones: a week-old
+conversation would have to be resumed before `/compact` meant anything. Open the
+row to see them; it stays open or closed across refreshes.
 
 **🔔 Notify me** asks the browser for notification permission and then raises a
 desktop notification when a session first crosses the threshold, or when one
@@ -221,10 +237,13 @@ exact numbers.
 - **Agent runs** — every individual subagent launch, by its task description.
 - **Per model** — tokens and cost split by model id.
 - **Per effort** — the same split by effort level.
-- **Top sessions** — the 25 largest, titled from the session's custom title or
-  its first prompt, with the current context size of each.
+- **Top conversations** — the 25 largest, titled from the custom title or the
+  first prompt, with when each began and its current context size. A
+  conversation resumed across several transcripts is one row, marked
+  *+N resumed*, and clicking it filters to the whole chain.
 
-Rows in the project, agent, model, effort and session tables are **clickable**:
+Rows in the project, agent, model, effort and conversation tables are
+**clickable**:
 one click filters the entire dashboard — every chart, KPI and panel — to that
 slice. Active filters show as chips under the header; remove one with its
 cross, or clear them all with `Escape`. The CSV export follows the current
@@ -436,7 +455,7 @@ are optional:
 | `compactTargetAuto` | ⚙ Measure the post-compact size from your own compactions rather than using `compactTargetTokens`. Default `true`. |
 | `compactTargetScope` | ⚙ Project whose compactions to measure, or `"*"` for all of them. Default `"*"`. |
 | `compactTargetTokens` | ⚙ Context size after compaction when measuring is off, or when fewer than three compactions have been seen. Kept at least 5,000 below the threshold. Default `20000`. |
-| `compactIdleHours` | ⚙ Sessions idle longer than this are shown dimmed. Default `48`. |
+| `compactIdleHours` | ⚙ Conversations idle longer than this are folded under *Idle* and left out of the headline count. Default `48`. |
 | `markRetentionDays` | ⚙ Days a "Compacted ✓" mark survives before it is deleted. `0` keeps them forever. Default `7`. |
 | `inferProjectFromPaths` | Attribute workspace-root sessions to a project using the files they touched. Default `true`. |
 
@@ -462,7 +481,7 @@ The page is a thin client over these endpoints:
 
 | Endpoint | Returns |
 | --- | --- |
-| `GET /api/usage?range=1d\|7d\|30d\|180d\|365d\|all` | Everything the page shows, as JSON. Optional `project`, `agent`, `model`, `session`, `effort` filters. |
+| `GET /api/usage?range=1d\|7d\|30d\|180d\|365d\|all` | Everything the page shows, as JSON. Optional `project`, `agent`, `model`, `session` (one transcript), `conversation` (a whole resumed chain), `effort` filters. |
 | `GET /api/usage.csv?range=…` | The daily series as CSV. |
 | `POST /api/compact-mark` | Body `{"session":"…","ts":1757000000000}` records a compaction mark; `{"session":"…","clear":true}` removes it. Refuses cross-origin writes. |
 | `GET /api/settings` | The editable settings, their defaults, and the spec the page builds its controls from (type, bounds, step, label, help). |

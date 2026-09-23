@@ -34,6 +34,7 @@ const state = {
   stack: 'type',
   compactOpen: true,
   marksOpen: false,
+  idleOpen: false,
   knobsOpen: false,
   // { values, defaults, tunables } from /api/settings, plus the unsaved edits.
   settings: null,
@@ -64,6 +65,7 @@ function loadPrefs() {
     if (['type', 'project', 'model', 'effort'].includes(p.stack)) state.stack = p.stack;
     if (typeof p.compactOpen === 'boolean') state.compactOpen = p.compactOpen;
     if (typeof p.marksOpen === 'boolean') state.marksOpen = p.marksOpen;
+    if (typeof p.idleOpen === 'boolean') state.idleOpen = p.idleOpen;
     if (typeof p.knobsOpen === 'boolean') state.knobsOpen = p.knobsOpen;
     if (typeof p.auto === 'boolean') state.auto = p.auto;
     if (Number.isFinite(p.autoEvery)) state.autoEvery = p.autoEvery;
@@ -83,6 +85,7 @@ function savePrefs() {
         stack: state.stack,
         compactOpen: state.compactOpen,
         marksOpen: state.marksOpen,
+        idleOpen: state.idleOpen,
         knobsOpen: state.knobsOpen,
         auto: state.auto,
         autoEvery: state.autoEvery,
@@ -151,6 +154,23 @@ function money(n) {
 
 function pct(n) {
   return (n * 100).toFixed(1) + '%';
+}
+
+/** "Sep 12" from a timestamp. */
+function dayLabel(ts) {
+  const d = new Date(ts);
+  return `${MONTHS[d.getMonth()]} ${d.getDate()}`;
+}
+
+/** "7 days" for 168, "36 hours" for 36. */
+function spanLabel(hours) {
+  return hours >= 48 && hours % 24 === 0 ? `${hours / 24} days` : `${hours} hours`;
+}
+
+// Tables scroll inside their own panel rather than spilling out of it: a
+// phone is narrower than seven columns, whatever the name column gives up.
+function tableWrap(html) {
+  return `<div class="tablewrap">${html}</div>`;
 }
 
 function shortDate(iso) {
@@ -586,7 +606,16 @@ function renderKpis() {
     { k: 'Output', v: fmt(t.output), s: fmt(t.thinking) + ' thinking', delta: deltaHtml(t.output, p.output, fmt) },
     { k: 'Cache hit rate', v: pct(d.cacheHitRate), s: 'of prompt tokens served from cache' },
     { k: 'Cache never reused', v: fmt(waste.tokens), s: money(waste.cost) + ' written, expired unread' },
-    { k: 'Messages', v: full(t.messages), s: full(d.sessionCount) + ' sessions', delta: deltaHtml(t.messages, p.messages, full) },
+    {
+      k: 'Requests',
+      v: full(t.messages),
+      s: full(d.conversationCount) + ' conversation' + (d.conversationCount === 1 ? '' : 's'),
+      delta: deltaHtml(t.messages, p.messages, full),
+      tip:
+        'API requests: every tool round-trip is one, so a single reply can be many.\n' +
+        `${full(d.conversationCount)} conversations across ${full(d.sessionCount)} transcripts - ` +
+        'resuming a session starts a new transcript.',
+    },
     { k: 'Active days', v: full(d.activeDays), s: fmt(d.avgPerActiveDay) + ' tok/day avg' },
   ];
   if (t.fastMessages) {
@@ -602,7 +631,7 @@ function renderKpis() {
   $('kpis').innerHTML = cards
     .map(
       (c) =>
-        `<div class="kpi${c.hero ? ' hero' : ''}"><div class="k">${esc(c.k)}</div>` +
+        `<div class="kpi${c.hero ? ' hero' : ''}"${c.tip ? ` title="${esc(c.tip)}"` : ''}><div class="k">${esc(c.k)}</div>` +
         `<div class="v">${esc(c.v)}</div><div class="s">${esc(c.s || '')}</div>${c.delta || ''}</div>`
     )
     .join('');
@@ -629,91 +658,114 @@ function renderCompact() {
   const c = state.data.compact;
   const host = $('compact');
   const list = c.suggestions;
-  const active = list.filter((s) => !s.idle).length;
+  const live = list.filter((s) => !s.idle);
+  const idle = list.filter((s) => s.idle);
   // Raised before the cards are built, so a session's tally includes the
   // alert this very refresh just sent rather than trailing it by one.
   maybeNotify(list);
   const raised = loadNotified();
   const folded = list.reduce((t, s) => t + (s.folded || 1), 0);
+  // The headline counts what can be acted on now. A conversation idle past
+  // the cutoff would have to be resumed before /compact meant anything, so it
+  // is listed - folded away - but not counted as waiting on you.
   $('compactHint').textContent =
-    `${list.length} of ${c.sessionsChecked} conversations carry ≥ ${fmt(c.threshold)} tokens of context` +
-    (list.length ? ` · ${active} active, ${list.length - active} idle` : '') +
+    `${live.length} of ${c.sessionsChecked} conversations carry ≥ ${fmt(c.threshold)} tokens of context` +
+    (idle.length ? ` · ${idle.length} idle, folded below` : '') +
     (folded > list.length ? ` · ${folded} transcripts folded in` : '');
 
-  if (!list.length) {
-    host.innerHTML =
-      `<p class="empty">Every session in this range is under ${fmt(c.threshold)} tokens of context. Nothing to compact.</p>`;
-  } else {
-    const byProject = new Map();
-    for (const s of list) {
-      if (!byProject.has(s.project)) byProject.set(s.project, []);
-      byProject.get(s.project).push(s);
+  const ctxMax = 1e6; // 1M context window on current models
+  const card = (s) => {
+    const title = s.title || s.session.slice(0, 8);
+    // Claude Code titles conversations by what they are about, so a project
+    // worked on daily produces a run of identically named cards. When it
+    // began, and which transcript it is, is what tells them apart.
+    const started = s.startedAt
+      ? `<span class="cid" title="${esc(
+          'conversation started ' + new Date(s.startedAt).toLocaleString() + '\n' + s.session
+        )}">${dayLabel(s.startedAt)} · ${esc(s.session.slice(0, 8))}</span>`
+      : '';
+    const comp = s.compactions
+      ? `<span class="badge" title="last one ${ago(s.lastCompaction)}">compacted ${s.compactions}×</span>`
+      : '';
+    // Resuming mints a new session id, so one conversation carried through
+    // three resumes used to be three cards - two of them for sessions you can
+    // no longer run anything in.
+    const chain =
+      s.folded > 1
+        ? `<span class="badge" title="${esc(
+            'resumed through ' + s.folded + ' transcripts: ' +
+              (s.sessions || []).map((x) => x.slice(0, 8)).join(', ')
+          )}">+${s.folded - 1} resumed</span>`
+        : '';
+    // Every alert this session has produced, collapsed onto the one card
+    // instead of arriving as a fresh nag each time.
+    const seen = raised[s.session];
+    const nag =
+      seen && seen.n > 1
+        ? `<span class="badge nag" title="${esc(
+            'first raised ' + (seen.first ? ago(seen.first) : 'earlier') +
+              ' — clears when you mark it compacted'
+          )}">asked ${seen.n}×</span>`
+        : '';
+    const idleBadge = s.idle ? `<span class="badge">idle ${Math.round(s.idleHours / 24)}d</span>` : '';
+    const tax = s.costPerMsgNow ? Math.min(0.99, s.savePerMsg / s.costPerMsgNow) : 0;
+    const growth = tax ? ` — ${Math.round(tax * 100)}% of it is re-reading context` : '';
+    const since = s.markedAt
+      ? `<div class="sm">counting since you marked it ${ago(s.markedAt)}</div>`
+      : '';
+    const top = s.topTools && s.topTools[0];
+    const tools = top
+      ? `<div class="sm">≈${Math.round(s.toolShare * 100)}% of that context is tool output — mostly ` +
+        `<b>${esc(toolLabel(top.name))}</b> (${fmt(top.tokens)} tok over ${full(top.calls)} calls)</div>`
+      : '';
+    const early = s.costPerMsgEarly
+      ? `<span class="sm" title="average of this session's first 10 turns"> · started at ${money(s.costPerMsgEarly)}</span>`
+      : '';
+    return (
+      `<div class="cs${s.idle ? ' idle' : ''}" title="${esc(s.session)}">` +
+      `<div><div class="t"><span class="ttl">${esc(title)}</span>${started}${chain}${comp}${nag}${idleBadge}</div>` +
+      `<div class="sm">${full(s.messages)} turns · ${full(s.turnsAboveThreshold)} over the threshold · last ${ago(s.lastActivity)}</div>` +
+      `${since}${tools}</div>` +
+      `<div><div class="big">${fmt(s.contextNow)}</div><div class="sm">context per turn · peak ${fmt(s.contextPeak)}</div>` +
+      `<div class="meter"><i style="width:${Math.min(100, (s.contextNow / ctxMax) * 100).toFixed(1)}%"></i></div></div>` +
+      `<div class="save"><div>${money(s.costPerMsgNow)} / turn now<span class="sm">${esc(growth)}</span>${early}</div>` +
+      `<div class="sm">compact saves ≈ <b>${money(s.savePerMsg)}</b> / turn · <b>${money(s.saveNext50)}</b> over 50 turns</div></div>` +
+      `<div class="act"><div class="cmd">/compact</div>` +
+      `<button class="markbtn" data-mark="${esc(s.session)}">Compacted ✓</button></div>` +
+      `</div>`
+    );
+  };
+  const byProject = (items) => {
+    const groups = new Map();
+    for (const s of items) {
+      if (!groups.has(s.project)) groups.set(s.project, []);
+      groups.get(s.project).push(s);
     }
-
-    const ctxMax = 1e6; // 1M context window on current models
-    host.innerHTML = [...byProject.entries()]
-      .map(([project, items]) => {
-        const cards = items
-          .map((s) => {
-            const title = s.title || s.session.slice(0, 8);
-            const comp = s.compactions
-              ? `<span class="badge" title="last one ${ago(s.lastCompaction)}">compacted ${s.compactions}×</span>`
-              : '';
-            // Resuming mints a new session id, so one conversation carried
-            // through three compactions used to be three cards - two of them
-            // for sessions you can no longer run anything in.
-            const chain =
-              s.folded > 1
-                ? `<span class="badge" title="${esc(
-                    'resumed through ' + s.folded + ' transcripts: ' +
-                      (s.sessions || []).map((x) => x.slice(0, 8)).join(', ')
-                  )}">+${s.folded - 1} resumed</span>`
-                : '';
-            // Every alert this session has produced, collapsed onto the one
-            // card instead of arriving as a fresh nag each time.
-            const seen = raised[s.session];
-            const nag =
-              seen && seen.n > 1
-                ? `<span class="badge nag" title="${esc(
-                    'first raised ' + (seen.first ? ago(seen.first) : 'earlier') +
-                      ' — clears when you mark it compacted'
-                  )}">asked ${seen.n}×</span>`
-                : '';
-            const idle = s.idle ? `<span class="badge">idle ${Math.round(s.idleHours / 24)}d</span>` : '';
-            const tax = s.costPerMsgNow ? Math.min(0.99, s.savePerMsg / s.costPerMsgNow) : 0;
-            const growth = tax ? ` — ${Math.round(tax * 100)}% of it is re-reading context` : '';
-            const since = s.markedAt
-              ? `<div class="sm">counting since you marked it ${ago(s.markedAt)}</div>`
-              : '';
-            const top = s.topTools && s.topTools[0];
-            const tools = top
-              ? `<div class="sm">≈${Math.round(s.toolShare * 100)}% of that context is tool output — mostly ` +
-                `<b>${esc(toolLabel(top.name))}</b> (${fmt(top.tokens)} tok over ${full(top.calls)} calls)</div>`
-              : '';
-            const early = s.costPerMsgEarly
-              ? `<span class="sm" title="average of this session's first 10 turns"> · started at ${money(s.costPerMsgEarly)}</span>`
-              : '';
-            return (
-              `<div class="cs${s.idle ? ' idle' : ''}" title="${esc(s.session)}">` +
-              `<div><div class="t">${esc(title)}${chain}${comp}${nag}${idle}</div>` +
-              `<div class="sm">${full(s.messages)} turns · ${full(s.turnsAboveThreshold)} over the threshold · last ${ago(s.lastActivity)}</div>` +
-              `${since}${tools}</div>` +
-              `<div><div class="big">${fmt(s.contextNow)}</div><div class="sm">context per turn · peak ${fmt(s.contextPeak)}</div>` +
-              `<div class="meter"><i style="width:${Math.min(100, (s.contextNow / ctxMax) * 100).toFixed(1)}%"></i></div></div>` +
-              `<div class="save"><div>${money(s.costPerMsgNow)} / turn now<span class="sm">${esc(growth)}</span>${early}</div>` +
-              `<div class="sm">compact saves ≈ <b>${money(s.savePerMsg)}</b> / turn · <b>${money(s.saveNext50)}</b> over 50 turns</div></div>` +
-              `<div class="act"><div class="cmd">/compact</div>` +
-              `<button class="markbtn" data-mark="${esc(s.session)}">Compacted ✓</button></div>` +
-              `</div>`
-            );
-          })
-          .join('');
-        return `<div class="cgroup"><h3 class="mini">${esc(project)} · ${items.length} session${items.length > 1 ? 's' : ''}</h3>${cards}</div>`;
-      })
+    return [...groups.entries()]
+      .map(
+        ([project, rows]) =>
+          `<div class="cgroup"><h3 class="mini">${esc(project)} · ${rows.length} conversation${rows.length > 1 ? 's' : ''}</h3>` +
+          `${rows.map(card).join('')}</div>`
+      )
       .join('');
-  }
+  };
 
-  host.innerHTML += markListHtml(c);
+  let html;
+  if (!list.length) {
+    html = `<p class="empty">Every conversation in this range is under ${fmt(c.threshold)} tokens of context. Nothing to compact.</p>`;
+  } else {
+    html = live.length
+      ? byProject(live)
+      : `<p class="empty">No active conversation needs /compact right now.</p>`;
+    if (idle.length) {
+      html +=
+        `<details class="marklist idlelist" id="idleList"${state.idleOpen ? ' open' : ''}>` +
+        `<summary><span class="chev">▾</span>Idle <b>${idle.length}</b>` +
+        `<span class="sm">no activity for over ${esc(spanLabel(c.idleHours))} · resume one before compacting it</span></summary>` +
+        `<div class="idlebody">${byProject(idle)}</div></details>`;
+    }
+  }
+  host.innerHTML = html + markListHtml(c);
   refreshKnobNotes();
 }
 
@@ -1242,7 +1294,7 @@ function renderBestDays() {
         `<div class="track" style="width:${w}%"></div>` +
         `<div class="rank">${medals[i] || '#' + (i + 1)}</div>` +
         `<div class="meta"><div class="d">${esc(niceDate(day.date))}</div>` +
-        `<div class="sm">${full(day.messages)} msgs · ${full(day.sessions)} sessions · ${fmt(day.output)} out` +
+        `<div class="sm">${full(day.messages)} requests · ${full(day.sessions)} conversations · ${fmt(day.output)} out` +
         (topProj ? ` · mostly ${esc(topProj[0])}` : '') +
         `</div></div>` +
         `<div class="amt"><b>${fmt(day.total)}</b><div class="sm">${money(day.cost)}</div></div>` +
@@ -1277,9 +1329,11 @@ function breakdownTable(host, list, opts) {
       );
     })
     .join('');
-  host.innerHTML =
+  host.innerHTML = tableWrap(
     `<table><thead><tr><th>${esc(o.nameHead || 'Name')}</th><th>Tokens</th><th>Share</th>` +
-    `<th>Output</th><th>Cache read</th><th>Msgs</th><th>Cost</th></tr></thead><tbody>${rows}</tbody></table>`;
+      `<th>Output</th><th>Cache read</th><th title="API requests">Requests</th><th>Cost</th></tr></thead>` +
+      `<tbody>${rows}</tbody></table>`
+  );
 }
 
 function renderProjects() {
@@ -1333,10 +1387,11 @@ function renderTools() {
       );
     })
     .join('');
-  host.innerHTML =
+  host.innerHTML = tableWrap(
     `<table><thead><tr><th>Tool</th><th>Est. tokens</th><th>Share</th><th>Calls</th>` +
-    (anyImages ? '<th title="Image blocks, estimated at a flat rate each">Images</th>' : '') +
-    `<th>Avg / call</th></tr></thead><tbody>${rows}</tbody></table>`;
+      (anyImages ? '<th title="Image blocks, estimated at a flat rate each">Images</th>' : '') +
+      `<th>Avg / call</th></tr></thead><tbody>${rows}</tbody></table>`
+  );
 }
 
 function renderBiggestTools() {
@@ -1402,7 +1457,7 @@ function renderSessions() {
   const d = state.data;
   const host = $('sessions');
   if (!d.sessions.length) {
-    host.innerHTML = '<p class="empty">No sessions in this range.</p>';
+    host.innerHTML = '<p class="empty">No conversations in this range.</p>';
     return;
   }
   const rows = d.sessions
@@ -1411,20 +1466,32 @@ function renderSessions() {
       const mins = Math.max(1, Math.round((s.last - s.first) / 60000));
       const span = mins >= 90 ? (mins / 60).toFixed(1) + 'h' : mins + 'm';
       const title = s.title || s.name.slice(0, 8);
+      const resumed = s.transcripts > 1 ? ` · +${s.transcripts - 1} resumed` : '';
+      const started = s.startedAt ? `started ${dayLabel(s.startedAt)} · ` : '';
       return (
-        `<tr class="clickable" data-filter-key="session" data-filter-value="${esc(s.name)}" ` +
-        `title="${esc(s.name)}${s.title ? '\n' + esc(s.title) : ''}">` +
-        `<td><span class="title">${esc(title)}</span>` +
-        `<div class="sm hint">${esc(s.project)} · ${when} · ${s.name.slice(0, 8)}</div></td>` +
+        `<tr class="clickable" data-filter-key="conversation" data-filter-value="${esc(s.name)}" ` +
+        `title="${esc(s.name)}${s.title ? '\n' + esc(s.title) : ''}${s.transcripts > 1 ? '\n' + s.transcripts + ' transcripts' : ''}">` +
+        `<td class="namecell"><span class="title">${esc(title)}</span>` +
+        `<div class="sm hint">${esc(s.project)} · ${started}last ${when} · ${s.name.slice(0, 8)}${resumed}</div></td>` +
         `<td>${fmt(s.total)}</td><td>${fmt(s.output)}</td><td>${full(s.messages)}</td>` +
         `<td>${fmt(s.contextNow)}</td><td>${span}</td><td>${money(s.cost)}</td></tr>`
       );
     })
     .join('');
-  host.innerHTML =
-    `<table><thead><tr><th>Session</th><th>Tokens</th><th>Output</th><th>Msgs</th>` +
-    `<th title="Context size of the latest main-thread turn">Ctx now</th><th>Span</th><th>Cost</th></tr></thead>` +
-    `<tbody>${rows}</tbody></table>`;
+  host.innerHTML = tableWrap(
+    `<table><thead><tr><th>Conversation</th><th>Tokens</th><th>Output</th><th title="API requests">Requests</th>` +
+      `<th title="Context size of the latest main-thread turn">Ctx now</th><th>Span</th><th>Cost</th></tr></thead>` +
+      `<tbody>${rows}</tbody></table>`
+  );
+}
+
+/** A filter value as a person would recognise it. */
+function filterLabel(key, value) {
+  if (key === 'conversation' || key === 'session') {
+    const row = (state.data.sessions || []).find((x) => x.name === value);
+    if (row && row.title) return row.title + ' · ' + String(value).slice(0, 8);
+  }
+  return String(value);
 }
 
 function renderFilterBar() {
@@ -1442,7 +1509,7 @@ function renderFilterBar() {
     keys
       .map(
         (k) =>
-          `<span class="fchip">${esc(k)}: <b>${esc(String(f[k]).slice(0, 60))}</b>` +
+          `<span class="fchip">${esc(k)}: <b>${esc(filterLabel(k, f[k]).slice(0, 60))}</b>` +
           `<button class="x" data-clear="${esc(k)}" title="Remove this filter">✕</button></span>`
       )
       .join('') +
@@ -1669,8 +1736,9 @@ $('compact').addEventListener('click', (e) => {
 });
 
 $('compact').addEventListener('toggle', (e) => {
-  if (e.target.id !== 'markList') return;
-  state.marksOpen = e.target.open;
+  if (e.target.id === 'markList') state.marksOpen = e.target.open;
+  else if (e.target.id === 'idleList') state.idleOpen = e.target.open;
+  else return;
   savePrefs();
 }, true);
 

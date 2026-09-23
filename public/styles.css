@@ -321,6 +321,28 @@ td {
   border-bottom: 1px solid #1e242e;
   text-align: right;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* A table scrolls inside its own panel instead of spilling out of it. The
+   numeric columns need about 375px; this floor leaves the name column ~165px,
+   so a phone scrolls sideways rather than cutting names to a few letters.
+   (A min-width on the name cell itself would not hold: the max-width: 0 that
+   makes it flexible overrides it.) */
+.tablewrap {
+  overflow-x: auto;
+}
+
+.tablewrap table {
+  min-width: 540px;
+}
+
+/* The name column takes whatever the numbers leave and truncates, so a long
+   path can no longer push the table wider than its panel. */
+td.rowbar,
+td.namecell {
+  width: 100%;
+  max-width: 0;
 }
 
 tbody tr:hover {
@@ -328,10 +350,15 @@ tbody tr:hover {
 }
 
 .name {
-  max-width: 260px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.name .sm,
+td.namecell .sm {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .rowbar {
@@ -559,7 +586,6 @@ tbody tr:hover {
 td .title {
   display: block;
   color: var(--text);
-  max-width: 320px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -605,11 +631,43 @@ kbd {
   opacity: 0.7;
 }
 
+/* Lets the first grid column shrink below its content, so the title can
+   truncate instead of widening the card. */
+.cs > div:first-child {
+  min-width: 0;
+}
+
 .cs .t {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
   font-weight: 600;
+  white-space: nowrap;
+}
+
+.cs .t .ttl {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+}
+
+.cs .t > :not(.ttl) {
+  flex: none;
+}
+
+.cs .t .badge {
+  margin-left: 0;
+}
+
+/* When a conversation began and which transcript it is: the only thing that
+   tells apart a run of cards Claude Code gave the same title. */
+.cs .cid {
+  font: 500 11px ui-monospace, SFMono-Regular, Consolas, monospace;
+  color: var(--muted);
+}
+
+.idlelist .idlebody {
+  margin-top: 10px;
 }
 
 .cs .sm {
