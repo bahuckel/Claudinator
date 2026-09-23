@@ -351,10 +351,11 @@ Anthropic API rates) with the standard cache multipliers: a 5-minute cache write
 costs 1.25× the input rate, a 1-hour cache write 2×, and a cache read 0.1×.
 
 **A model can override any of those three.** They are not uniform: Fable 5.1 and
-Mythos 5.1 read cache at **0.025×** their input rate, not 0.1×. Cache reads are
-what an agentic session spends almost everything on — 99% of the tokens on the
-corpus this was built against — so billing them flat overcharges those models
-4× on the line that matters most. Put the exception on the model row:
+Mythos 5.1 read cache at **0.025×** their input rate, and Opus 5.5 at **0.05×**,
+not 0.1×. Cache reads are what an agentic session spends almost everything on —
+99% of the tokens on the corpus this was built against — so billing them flat
+overcharges those models 2–4× on the line that matters most. Put the exception
+on the model row:
 
 ```json
 "claude-fable-5-1": { "input": 10.0, "output": 50.0, "cacheMultipliers": { "read": 0.025 } }
