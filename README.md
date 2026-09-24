@@ -371,6 +371,11 @@ The project table shows how many folders fed each project and how many of its
 sessions were inferred; hover for the list. If the heuristic guesses wrong for
 your layout, override it in `config.json`.
 
+Paths are read as recorded, not as the machine reading them would write them:
+transcripts copied from Windows and opened on macOS or Linux roll up, infer and
+are named the same as on Windows — both separators count, and Windows paths
+compare case-insensitively wherever they are read.
+
 **Agents.** Main-thread records are `main thread`. Subagent transcripts live in
 `<session>/subagents/agent-<agentId>.jsonl` and every line carries `agentId`.
 The spawning session holds the other half of the link: an `Agent`/`Task`

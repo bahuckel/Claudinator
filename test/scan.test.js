@@ -811,6 +811,71 @@ test('a project is named by its last folder on either separator, on any host', (
   }
 });
 
+// Runs fn with process.platform reading as the given OS.
+function asPlatform(platform, fn) {
+  const own = Object.getOwnPropertyDescriptor(process, 'platform');
+  Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+  try {
+    return fn();
+  } finally {
+    Object.defineProperty(process, 'platform', own);
+  }
+}
+
+test('subfolders roll up and workspace sessions are inferred on either separator, on any host', () => {
+  const B = String.fromCharCode(92);
+  const layouts = {
+    Windows: (...segs) => ['C:', 'ws', ...segs].join(B),
+    POSIX: (...segs) => ['', 'ws', ...segs].join('/'),
+  };
+  for (const [host, impl, platform] of [['Windows', path.win32, 'win32'], ['POSIX', path.posix, 'linux']]) {
+    const { assignProjects } = loadScanWith(impl);
+    for (const [kind, at] of Object.entries(layouts)) {
+      const where = 'a ' + kind + ' path on a ' + host + ' host';
+      const rec = (session, cwd) => ({ session, cwd });
+      const recs = [
+        rec('s-alpha', at('Alpha')),
+        rec('s-deep', at('Alpha', 'src', 'deep')),
+        rec('s-beta', at('Beta')),
+        rec('s-gamma', at('Gamma')),
+        rec('s-root', at()), // started in the workspace itself
+      ];
+      const hits = { 's-root': { [at('Beta', 'src')]: 2, [at('Beta')]: 1 } };
+      const inferred = asPlatform(platform, () => assignProjects(recs, hits, { minWorkspaceChildren: 3 }));
+      const by = Object.fromEntries(recs.map((r) => [r.session, r]));
+      assert.equal(by['s-deep'].project, 'Alpha', 'subfolder rolls up: ' + where);
+      assert.equal(by['s-deep'].projectPath, at('Alpha'), where);
+      assert.equal(by['s-gamma'].project, 'Gamma', where);
+      assert.equal(by['s-root'].workspaceRoot, true, 'workspace found: ' + where);
+      assert.equal(by['s-root'].project, 'Beta', 'workspace session inferred: ' + where);
+      assert.equal(by['s-root'].projectInferred, true, where);
+      assert.equal(inferred['s-root'].hits, 3, where);
+    }
+  }
+});
+
+test('Windows paths keep their case-insensitivity when read elsewhere', () => {
+  const B = String.fromCharCode(92);
+  const { assignProjects } = loadScanWith(path.posix);
+  const recs = [
+    { session: 'a', cwd: ['C:', 'ws', 'Alpha'].join(B) },
+    { session: 'b', cwd: ['c:', 'WS', 'alpha', 'src'].join(B) },
+    { session: 'c', cwd: ['C:', 'ws', 'Beta'].join(B) },
+    { session: 'd', cwd: ['C:', 'ws', 'Gamma'].join(B) },
+  ];
+  const posix = [
+    { session: 'a', cwd: '/ws/Alpha' },
+    { session: 'b', cwd: '/ws/alpha/src' },
+  ];
+  asPlatform('linux', () => {
+    assignProjects(recs, {}, { minWorkspaceChildren: 3 });
+    assignProjects(posix, {}, {});
+  });
+  assert.equal(recs[1].project.toLowerCase(), 'alpha', 'c:\\WS\\alpha is C:\\ws\\Alpha');
+  // a POSIX path stays case-sensitive, as on its own OS
+  assert.equal(posix[1].projectPath, '/ws/alpha/src');
+});
+
 test('project resolver honours explicit projectRoots', () => {
   const ws = tmpDir();
   const mono = path.join(ws, 'mono');
