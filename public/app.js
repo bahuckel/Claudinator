@@ -18,7 +18,7 @@ const TYPE_SERIES = [
 
 // Categorical palette for stacking by project / model / effort.
 const PALETTE = [
-  '#d97757', '#6aa9ff', '#4fbf87', '#b98cff', '#f2c14e', '#ff7eb6',
+  '#d97757', '#6aa9ff', '#4fbf87', '#b98cff', '#f2c14e', '#b08d57',
   '#5fd3d3', '#ff9f43', '#9bb0c9', '#c8e06b', '#e26d6d', '#7f8cff',
 ];
 const OTHER_COLOR = 'var(--c-other)';
