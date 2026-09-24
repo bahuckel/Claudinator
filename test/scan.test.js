@@ -780,6 +780,37 @@ test('Claude desktop scratch folders are one project, not one per chat', () => {
   assert.equal(pinned(cwds[0]).label, 'scratch-2026-09-04-5742c0');
 });
 
+// lib/scan.js as it loads on another OS: its path module swapped for the
+// given one (path.posix is what macOS and Linux have).
+function loadScanWith(impl) {
+  const Module = require('module');
+  const file = require.resolve('../lib/scan.js');
+  const load = Module._load;
+  const cached = require.cache[file];
+  delete require.cache[file];
+  Module._load = function (request, parent) {
+    if ((request === 'path' || request === 'node:path') && parent && parent.filename === file) return impl;
+    return load.apply(this, arguments);
+  };
+  try {
+    return require(file);
+  } finally {
+    Module._load = load;
+    require.cache[file] = cached;
+  }
+}
+
+test('a project is named by its last folder on either separator, on any host', () => {
+  const B = String.fromCharCode(92);
+  const win = ['C:', 'work', 'My Proj'].join(B);
+  const mac = '/Users/me/code/proj-mac';
+  for (const [host, impl] of [['Windows', path.win32], ['POSIX', path.posix]]) {
+    const resolve = loadScanWith(impl).buildProjectResolver([win, mac], { projectRoots: [win, mac] });
+    assert.equal(resolve(win).label, 'My Proj', 'a Windows path on a ' + host + ' host');
+    assert.equal(resolve(mac).label, 'proj-mac', 'a POSIX path on a ' + host + ' host');
+  }
+});
+
 test('project resolver honours explicit projectRoots', () => {
   const ws = tmpDir();
   const mono = path.join(ws, 'mono');
